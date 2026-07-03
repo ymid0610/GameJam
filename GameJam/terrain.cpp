@@ -1,4 +1,5 @@
 #include "terrain.h"
+#include "towerdefenseroute.h"
 
 #include <filesystem>
 #include <fstream>
@@ -99,18 +100,22 @@ namespace
     {
         const UINT vertexBufferSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
 
+        auto defaultHeapProperties1 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto resourceDesc1 = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+            &defaultHeapProperties1,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize),
+            &resourceDesc1,
             D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr,
             IID_PPV_ARGS(&vertexBuffer)));
 
+        auto uploadHeapProperties2 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto resourceDesc2 = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+            &uploadHeapProperties2,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize),
+            &resourceDesc2,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,
             IID_PPV_ARGS(&vertexUploadBuffer)));
@@ -121,9 +126,10 @@ namespace
         vertexData.SlicePitch = vertexData.RowPitch;
         UpdateSubresources<1>(commandList.Get(), vertexBuffer.Get(), vertexUploadBuffer.Get(), 0, 0, 1, &vertexData);
 
-        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(vertexBuffer.Get(),
+        auto resourceBarrier1 = CD3DX12_RESOURCE_BARRIER::Transition(vertexBuffer.Get(),
             D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        commandList->ResourceBarrier(1, &resourceBarrier1);
 
         vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
         vertexBufferView.SizeInBytes = vertexBufferSize;
@@ -139,18 +145,22 @@ namespace
     {
         const UINT indexBufferSize = static_cast<UINT>(indices.size() * sizeof(UINT));
 
+        auto defaultHeapProperties3 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto resourceDesc3 = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+            &defaultHeapProperties3,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize),
+            &resourceDesc3,
             D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr,
             IID_PPV_ARGS(&indexBuffer)));
 
+        auto uploadHeapProperties4 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto resourceDesc4 = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+            &uploadHeapProperties4,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize),
+            &resourceDesc4,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,
             IID_PPV_ARGS(&indexUploadBuffer)));
@@ -161,9 +171,10 @@ namespace
         indexData.SlicePitch = indexData.RowPitch;
         UpdateSubresources<1>(commandList.Get(), indexBuffer.Get(), indexUploadBuffer.Get(), 0, 0, 1, &indexData);
 
-        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(indexBuffer.Get(),
+        auto resourceBarrier2 = CD3DX12_RESOURCE_BARRIER::Transition(indexBuffer.Get(),
             D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_INDEX_BUFFER));
+            D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        commandList->ResourceBarrier(1, &resourceBarrier2);
 
         indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
         indexBufferView.Format = DXGI_FORMAT_R32_UINT;
@@ -190,14 +201,94 @@ namespace
         float maxY = bounds.Center.y + bounds.Extents.y;
         float t = (maxY > minY) ? clamp((height - minY) / (maxY - minY), 0.0f, 1.0f) : 0.0f;
 
-        XMFLOAT3 low{ 0.20f, 0.43f, 0.18f };
-        XMFLOAT3 high{ 0.58f, 0.55f, 0.48f };
+        XMFLOAT3 low{ 0.17f, 0.32f, 0.11f };
+        XMFLOAT3 mid{ 0.34f, 0.41f, 0.18f };
+        XMFLOAT3 high{ 0.56f, 0.55f, 0.50f };
+        XMFLOAT3 color = t < 0.62f
+            ? XMFLOAT3{
+                low.x + (mid.x - low.x) * (t / 0.62f),
+                low.y + (mid.y - low.y) * (t / 0.62f),
+                low.z + (mid.z - low.z) * (t / 0.62f)
+            }
+            : XMFLOAT3{
+                mid.x + (high.x - mid.x) * ((t - 0.62f) / 0.38f),
+                mid.y + (high.y - mid.y) * ((t - 0.62f) / 0.38f),
+                mid.z + (high.z - mid.z) * ((t - 0.62f) / 0.38f)
+            };
         return XMFLOAT4{
-            low.x + (high.x - low.x) * t,
-            low.y + (high.y - low.y) * t,
-            low.z + (high.z - low.z) * t,
+            color.x,
+            color.y,
+            color.z,
             1.0f
         };
+    }
+
+    float Smooth01(float value)
+    {
+        value = clamp(value, 0.0f, 1.0f);
+        return value * value * (3.0f - 2.0f * value);
+    }
+
+    float Hash01(int x, int z)
+    {
+        unsigned int n = static_cast<unsigned int>(x) * 374761393u +
+            static_cast<unsigned int>(z) * 668265263u;
+        n = (n ^ (n >> 13u)) * 1274126177u;
+        return static_cast<float>((n ^ (n >> 16u)) & 0x00ffffffu) / 16777215.0f;
+    }
+
+    float ValueNoise(float x, float z)
+    {
+        int x0 = static_cast<int>(floorf(x));
+        int z0 = static_cast<int>(floorf(z));
+        float tx = Smooth01(x - static_cast<float>(x0));
+        float tz = Smooth01(z - static_cast<float>(z0));
+
+        float a = Hash01(x0, z0);
+        float b = Hash01(x0 + 1, z0);
+        float c = Hash01(x0, z0 + 1);
+        float d = Hash01(x0 + 1, z0 + 1);
+        float ab = a + (b - a) * tx;
+        float cd = c + (d - c) * tx;
+        return ab + (cd - ab) * tz;
+    }
+
+    float FractalNoise(float x, float z, int octaves)
+    {
+        float value = 0.0f;
+        float amplitude = 0.5f;
+        float frequency = 1.0f;
+        for (int i = 0; i < octaves; ++i)
+        {
+            value += ValueNoise(x * frequency, z * frequency) * amplitude;
+            frequency *= 2.03f;
+            amplitude *= 0.5f;
+        }
+        return value;
+    }
+
+    float RoadMaskNormalized(float nx, float nz, float innerHalfWidth, float outerHalfWidth)
+    {
+        if (nx < TowerDefenseRoute::StartX - 0.006f || nx > TowerDefenseRoute::EndX + 0.015f) return 0.0f;
+
+        float mask = 0.0f;
+        for (int route = 0; route < TowerDefenseRoute::RouteCount; ++route)
+        {
+            float offset = fabsf(nz - TowerDefenseRoute::CenterZ(route, nx));
+            float edge = 1.0f - Smooth01((offset - innerHalfWidth) / (outerHalfWidth - innerHalfWidth));
+            mask = max(mask, clamp(edge, 0.0f, 1.0f));
+        }
+        return mask;
+    }
+
+    float TerrainRoadMask(float localX, float localZ, const TerrainHeightMap& heightMap)
+    {
+        float nx = heightMap.GetWorldWidth() > 0.0f ? localX / heightMap.GetWorldWidth() : 0.0f;
+        float nz = heightMap.GetWorldLength() > 0.0f ? localZ / heightMap.GetWorldLength() : 0.0f;
+
+        constexpr float innerHalfWidth = 0.018f;
+        constexpr float outerHalfWidth = 0.046f;
+        return RoadMaskNormalized(nx, nz, innerHalfWidth, outerHalfWidth);
     }
 }
 
@@ -248,15 +339,33 @@ shared_ptr<TerrainHeightMap> TerrainHeightMap::CreateWaveField(UINT width, UINT 
         {
             float nx = static_cast<float>(x) / static_cast<float>(width - 1);
             float nz = static_cast<float>(z) / static_cast<float>(length - 1);
+            float broad = FractalNoise(nx * 3.4f, nz * 3.4f, 4) - 0.5f;
+            float detail = FractalNoise(nx * 15.0f + 37.0f, nz * 15.0f - 11.0f, 3) - 0.5f;
+            float micro = FractalNoise(nx * 46.0f, nz * 46.0f, 2) - 0.5f;
             float crossWave = sinf(nx * XM_2PI * frequency) * cosf(nz * XM_2PI * frequency * 0.85f);
             float diagonalWave = sinf((nx + nz) * XM_2PI * frequency * 0.55f);
+            float ridgeLine = 1.0f - fabsf(sinf((nx * 1.42f + nz * 0.90f) * XM_2PI));
+            float mountainRidge = powf(max(0.0f, ridgeLine), 3.2f);
+            float hillA = expf(-17.0f * ((nx - 0.20f) * (nx - 0.20f) + (nz - 0.25f) * (nz - 0.25f)));
+            float hillB = expf(-12.5f * ((nx - 0.77f) * (nx - 0.77f) + (nz - 0.78f) * (nz - 0.78f)));
+            float hillC = expf(-20.0f * ((nx - 0.58f) * (nx - 0.58f) + (nz - 0.20f) * (nz - 0.20f)));
 
-            float canyonCenter = 0.5f + sinf(nx * XM_2PI * 2.0f) * 0.08f;
-            float canyonOffset = nz - canyonCenter;
-            float narrowCanyon = -1.35f * expf(-(canyonOffset * canyonOffset) / 0.00055f);
+            float canyonMask = RoadMaskNormalized(nx, nz, 0.0f, 0.070f);
+            float roadCenterMask = RoadMaskNormalized(nx, nz, 0.012f, 0.052f);
+            float canyonRoughness = (detail * 0.20f + micro * 0.07f +
+                sinf((nx * 38.0f + nz * 17.0f) * XM_2PI) * 0.014f) * canyonMask;
+            float wideCanyon = -1.45f * canyonMask + canyonRoughness;
+
+            float naturalHeight = broad * 1.15f + detail * 0.46f + micro * 0.14f +
+                crossWave * 0.34f + diagonalWave * 0.22f + mountainRidge * 1.75f +
+                hillA * 1.40f + hillB * 1.20f + hillC * 1.05f + wideCanyon;
+            float roadGradeHeight = broad * 0.36f + detail * 0.06f +
+                crossWave * 0.06f + diagonalWave * 0.04f -
+                1.08f * canyonMask + canyonRoughness * 0.20f;
+            float roadBlend = roadCenterMask * 0.72f;
 
             heights[static_cast<size_t>(z) * width + x] =
-                (crossWave * 0.65f + diagonalWave * 0.25f + narrowCanyon) * amplitude;
+                (naturalHeight + (roadGradeHeight - naturalHeight) * roadBlend) * amplitude;
         }
     }
 
@@ -535,10 +644,12 @@ TerrainMesh::TerrainMesh(const ComPtr<ID3D12Device>& device,
             float px = static_cast<float>(x) * heightMap->GetCellSpacing();
             float pz = static_cast<float>(z) * heightMap->GetCellSpacing();
             float height = heightMap->SampleHeight(px, pz);
+            XMFLOAT4 terrainColor = GetTerrainColor(height, bounds);
+            terrainColor.w = TerrainRoadMask(px, pz, *heightMap);
             vertices.push_back({
                 XMFLOAT3{ px, height, pz },
                 heightMap->SampleNormal(px, pz),
-                GetTerrainColor(height, bounds)
+                terrainColor
                 });
         }
     }

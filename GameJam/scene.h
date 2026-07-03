@@ -9,6 +9,7 @@
 #include "physicsmanager.h"
 #include "light.h"
 #include "bullet.h"
+#include "shadow.h"
 
 class Scene
 {
@@ -17,6 +18,7 @@ public:
     virtual ~Scene() = default;
 
     virtual void Update(FLOAT timeElapsed);
+    virtual void RenderShadowMap(const ComPtr<ID3D12GraphicsCommandList>& commandList);
     virtual void Render(const ComPtr<ID3D12GraphicsCommandList>& commandList) const;
     virtual void BuildObjects(const ComPtr<ID3D12Device>& device,
         const ComPtr<ID3D12GraphicsCommandList>& commandList,
@@ -27,6 +29,7 @@ public:
     void UpdateSpringCamera();
 
     virtual void MouseEvent(HWND hWnd, FLOAT timeElapsed);
+    virtual void MouseButtonEvent(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     virtual void KeyboardEvent(FLOAT timeElapsed);
     virtual bool OnKeyDown(WPARAM wParam);
     virtual void MouseWheelEvent(WPARAM wParam);
@@ -77,6 +80,7 @@ protected:
     shared_ptr<GameObject> m_firstPersonGun;
     shared_ptr<GameObject> m_crosshair;
     vector<shared_ptr<Bullet>> m_bullets;
+    unique_ptr<ShadowMap> m_shadowMap;
 
     unique_ptr<CollisionManager> m_collisionManager;
     unique_ptr<PhysicsManager> m_physicsManager;

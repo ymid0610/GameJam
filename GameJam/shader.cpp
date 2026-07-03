@@ -27,7 +27,10 @@ namespace
 		std::wstring outputShader = executableDirectory + localShader;
 		if (FileExists(outputShader)) return outputShader;
 
-		std::wstring projectShader = executableDirectory + L"..\\..\\01. Framework\\shader.hlsl";
+		std::wstring projectShader = executableDirectory + L"..\\..\\GameJam\\shader.hlsl";
+		if (FileExists(projectShader)) return projectShader;
+
+		projectShader = executableDirectory + L"..\\..\\01. Framework\\shader.hlsl";
 		if (FileExists(projectShader)) return projectShader;
 
 		return localShader;
@@ -58,7 +61,12 @@ Shader::Shader(const ComPtr<ID3D12Device>& device,
 	const ComPtr<ID3D12RootSignature>& rootSignature,
 	LPCSTR pixelShaderEntry,
 	bool depthEnabled,
-	D3D12_PRIMITIVE_TOPOLOGY_TYPE primitiveTopologyType)
+	D3D12_PRIMITIVE_TOPOLOGY_TYPE primitiveTopologyType,
+	LPCSTR vertexShaderEntry,
+	bool renderTargetEnabled,
+	DXGI_FORMAT depthStencilFormat,
+	INT depthBias,
+	FLOAT slopeScaledDepthBias)
 {
 	m_lightConstants.meta = XMFLOAT4{ 0.0f, 0.0f, 0.0f, 0.0f };
 
@@ -75,8 +83,11 @@ Shader::Shader(const ComPtr<ID3D12Device>& device,
 
 	ComPtr<ID3DBlob> mvsByteCode, mpsByteCode;
 	std::wstring shaderPath = ResolveShaderPath();
-	CompileShaderFromResolvedFile(shaderPath, "VERTEX_MAIN", "vs_5_1", compileFlags, mvsByteCode);
-	CompileShaderFromResolvedFile(shaderPath, pixelShaderEntry, "ps_5_1", compileFlags, mpsByteCode);
+	CompileShaderFromResolvedFile(shaderPath, vertexShaderEntry, "vs_5_1", compileFlags, mvsByteCode);
+	if (pixelShaderEntry && pixelShaderEntry[0] != '\0')
+	{
+		CompileShaderFromResolvedFile(shaderPath, pixelShaderEntry, "ps_5_1", compileFlags, mpsByteCode);
+	}
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
 	psoDesc.InputLayout = { inputLayout.data(), (UINT)inputLayout.size() };
@@ -84,34 +95,62 @@ Shader::Shader(const ComPtr<ID3D12Device>& device,
 	psoDesc.VS = {
 		reinterpret_cast<BYTE*>(mvsByteCode->GetBufferPointer()),
 		mvsByteCode->GetBufferSize() };
-	psoDesc.PS = {
-		reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()),
-		mpsByteCode->GetBufferSize() };
+	if (mpsByteCode)
+	{
+		psoDesc.PS = {
+			reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()),
+			mpsByteCode->GetBufferSize() };
+	}
 	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+	psoDesc.RasterizerState.DepthBias = depthBias;
+	psoDesc.RasterizerState.SlopeScaledDepthBias = slopeScaledDepthBias;
 	psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
 	psoDesc.DepthStencilState.DepthEnable = depthEnabled;
 	psoDesc.DepthStencilState.DepthWriteMask = depthEnabled ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
 	psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+	psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+	psoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+	psoDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+	psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+	psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+	psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+	psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
 	psoDesc.SampleMask = UINT_MAX;
 	psoDesc.PrimitiveTopologyType = primitiveTopologyType;
-	psoDesc.NumRenderTargets = 1;
-	psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-	psoDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	psoDesc.NumRenderTargets = renderTargetEnabled ? 1u : 0u;
+	if (renderTargetEnabled) psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+	psoDesc.DSVFormat = depthStencilFormat;
 	psoDesc.SampleDesc.Count = 1;
 	psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
 	Utiles::ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_pipelineState)));
 
 	const UINT lightBufferSize = AlignConstantBufferSize(static_cast<UINT>(sizeof(LightBufferData)));
+	auto uploadHeapProperties1 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+	auto resourceDesc1 = CD3DX12_RESOURCE_DESC::Buffer(lightBufferSize);
 	Utiles::ThrowIfFailed(device->CreateCommittedResource(
-		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+		&uploadHeapProperties1,
 		D3D12_HEAP_FLAG_NONE,
-		&CD3DX12_RESOURCE_DESC::Buffer(lightBufferSize),
+		&resourceDesc1,
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
 		IID_PPV_ARGS(&m_lightBuffer)));
 
 	Utiles::ThrowIfFailed(m_lightBuffer->Map(0, nullptr, reinterpret_cast<void**>(&m_mappedLightData)));
 	memcpy(m_mappedLightData, &m_lightConstants, sizeof(m_lightConstants));
+
+	const UINT defaultMaterialBufferSize = AlignConstantBufferSize(static_cast<UINT>(sizeof(MaterialConstants)));
+	auto materialUploadHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+	auto materialBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(defaultMaterialBufferSize);
+	Utiles::ThrowIfFailed(device->CreateCommittedResource(
+		&materialUploadHeapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&materialBufferDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&m_defaultMaterialBuffer)));
+
+	Utiles::ThrowIfFailed(m_defaultMaterialBuffer->Map(0, nullptr, reinterpret_cast<void**>(&m_mappedDefaultMaterialData)));
+	memcpy(m_mappedDefaultMaterialData, &m_defaultMaterialConstants, sizeof(m_defaultMaterialConstants));
 }
 
 Shader::~Shader()
@@ -121,12 +160,19 @@ Shader::~Shader()
 		m_lightBuffer->Unmap(0, nullptr);
 		m_mappedLightData = nullptr;
 	}
+
+	if (m_defaultMaterialBuffer && m_mappedDefaultMaterialData)
+	{
+		m_defaultMaterialBuffer->Unmap(0, nullptr);
+		m_mappedDefaultMaterialData = nullptr;
+	}
 }
 
 void Shader::UpdateShaderVariable(const ComPtr<ID3D12GraphicsCommandList>& commandList)
 {
 	commandList->SetPipelineState(m_pipelineState.Get());
 	if (m_lightBuffer) commandList->SetGraphicsRootConstantBufferView(2, m_lightBuffer->GetGPUVirtualAddress());
+	if (m_defaultMaterialBuffer) commandList->SetGraphicsRootConstantBufferView(3, m_defaultMaterialBuffer->GetGPUVirtualAddress());
 }
 
 void Shader::SetLights(const vector<LightShaderData>& lightData)

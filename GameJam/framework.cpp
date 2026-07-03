@@ -1,4 +1,5 @@
 #include "framework.h"
+#include "towerdefensescene.h"
 
 #if defined(PROJECT02_GAME) || defined(PROJECT03_GAME) || defined(PROJECT04_GAME)
 unique_ptr<Scene> CreateProjectInitialScene();
@@ -43,6 +44,11 @@ void GameFramework::FrameAdvance()
 void GameFramework::MouseEvent(HWND hWnd, FLOAT timeElapsed)
 {
 	m_scene->MouseEvent(hWnd, timeElapsed);
+}
+
+void GameFramework::MouseButtonEvent(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	 m_scene->MouseButtonEvent(hWnd, message, wParam, lParam);
 }
 
 void GameFramework::KeyboardEvent(FLOAT timeElapsed)
@@ -225,8 +231,9 @@ void GameFramework::CreateDepthStencilView()
 	optClear.DepthStencil.Depth = 1.0f;
 	optClear.DepthStencil.Stencil = 0;
 
+	auto defaultHeapProperties1 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
 	Utiles::ThrowIfFailed(m_device->CreateCommittedResource(
-		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+		&defaultHeapProperties1,
 		D3D12_HEAP_FLAG_NONE,
 		&depthStencilDesc,
 		D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -243,7 +250,7 @@ void GameFramework::CreateDepthStencilView()
 
 void GameFramework::CreateRootSignature()
 {
-	CD3DX12_ROOT_PARAMETER rootParameter[3];
+	CD3DX12_ROOT_PARAMETER rootParameter[6];
 
 	// GameObject : 월드 변환 행렬(16)
 	rootParameter[0].InitAsConstants(16, 0, 0, D3D12_SHADER_VISIBILITY_ALL);
@@ -254,8 +261,32 @@ void GameFramework::CreateRootSignature()
 	// Lighting : CBV로 여러 조명 전달
 	rootParameter[2].InitAsConstantBufferView(2, 0, D3D12_SHADER_VISIBILITY_PIXEL);
 
+	// Material : 색상/표면 속성
+	rootParameter[3].InitAsConstantBufferView(3, 0, D3D12_SHADER_VISIBILITY_PIXEL);
+
+	// Shadow : light view-projection + options
+	rootParameter[4].InitAsConstantBufferView(4, 0, D3D12_SHADER_VISIBILITY_ALL);
+
+	CD3DX12_DESCRIPTOR_RANGE shadowMapRange;
+	shadowMapRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+	rootParameter[5].InitAsDescriptorTable(1, &shadowMapRange, D3D12_SHADER_VISIBILITY_PIXEL);
+
+	CD3DX12_STATIC_SAMPLER_DESC shadowSampler(
+		0,
+		D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+		0.0f,
+		16,
+		D3D12_COMPARISON_FUNC_LESS_EQUAL,
+		D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE,
+		0.0f,
+		D3D12_FLOAT32_MAX,
+		D3D12_SHADER_VISIBILITY_PIXEL);
+
 	CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-	rootSignatureDesc.Init(_countof(rootParameter), rootParameter, 0, NULL, 
+	rootSignatureDesc.Init(_countof(rootParameter), rootParameter, 1, &shadowSampler,
 		D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
 	ComPtr<ID3DBlob> signature, error;
@@ -273,7 +304,7 @@ void GameFramework::BuildObjects()
 #if defined(PROJECT02_GAME) || defined(PROJECT03_GAME) || defined(PROJECT04_GAME)
 	 m_scene->PushScene(m_device, m_commandList, m_rootSignature, CreateProjectInitialScene());
 #else
-	 m_scene->PushScene(m_device, m_commandList, m_rootSignature, make_unique<TestScene>());
+	 m_scene->PushScene(m_device, m_commandList, m_rootSignature, make_unique<TowerDefenseScene>());
 #endif
 
 	m_commandList->Close();
@@ -314,8 +345,12 @@ void GameFramework::Render()
 	Utiles::ThrowIfFailed(m_commandAllocator->Reset());
 	Utiles::ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
 
-	m_commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(m_renderTargets[m_frameIndex].Get(), 
-		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+	m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
+	if (m_scene) m_scene->RenderShadowMap(m_commandList);
+
+	auto resourceBarrier1 = CD3DX12_RESOURCE_BARRIER::Transition(m_renderTargets[m_frameIndex].Get(), 
+		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	m_commandList->ResourceBarrier(1, &resourceBarrier1);
 
 	m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
 	m_commandList->RSSetViewports(1, &m_viewport);
@@ -333,8 +368,9 @@ void GameFramework::Render()
 
 	m_scene->Render(m_commandList);
 
-	m_commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(m_renderTargets[m_frameIndex].Get(),
-		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
+	auto resourceBarrier2 = CD3DX12_RESOURCE_BARRIER::Transition(m_renderTargets[m_frameIndex].Get(),
+		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+	m_commandList->ResourceBarrier(1, &resourceBarrier2);
 
 	Utiles::ThrowIfFailed(m_commandList->Close());
 	ID3D12CommandList* ppCommandList[] = { m_commandList.Get() };

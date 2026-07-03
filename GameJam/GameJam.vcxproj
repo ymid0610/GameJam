@@ -76,6 +76,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -90,6 +91,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -102,6 +104,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -115,8 +118,8 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <ConformanceMode>false</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -129,10 +132,12 @@
     <ClInclude Include="camera.h" />
     <ClInclude Include="collider.h" />
     <ClInclude Include="collisionmanager.h" />
+    <ClInclude Include="component.h" />
     <ClInclude Include="d3dx12.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="GameJam.h" />
     <ClInclude Include="light.h" />
+    <ClInclude Include="material.h" />
     <ClInclude Include="mesh.h" />
     <ClInclude Include="object.h" />
     <ClInclude Include="physicsmanager.h" />
@@ -143,9 +148,13 @@
     <ClInclude Include="sceneasset.h" />
     <ClInclude Include="scenemanager.h" />
     <ClInclude Include="settings.h" />
+    <ClInclude Include="shadow.h" />
     <ClInclude Include="shader.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="targetver.h" />
+    <ClInclude Include="timer.h" />
+    <ClInclude Include="towerdefenseroute.h" />
+    <ClInclude Include="towerdefensescene.h" />
     <ClInclude Include="terrain.h" />
   </ItemGroup>
   <ItemGroup>
@@ -157,6 +166,7 @@
     <ClCompile Include="framework.cpp" />
     <ClCompile Include="GameJam.cpp" />
     <ClCompile Include="light.cpp" />
+    <ClCompile Include="material.cpp" />
     <ClCompile Include="mesh.cpp" />
     <ClCompile Include="object.cpp" />
     <ClCompile Include="physicsmanager.cpp" />
@@ -165,8 +175,11 @@
     <ClCompile Include="scene.cpp" />
     <ClCompile Include="sceneasset.cpp" />
     <ClCompile Include="scenemanager.cpp" />
+    <ClCompile Include="shadow.cpp" />
     <ClCompile Include="shader.cpp" />
     <ClCompile Include="stdafx.cpp" />
+    <ClCompile Include="timer.cpp" />
+    <ClCompile Include="towerdefensescene.cpp" />
     <ClCompile Include="terrain.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -177,8 +190,12 @@
     <Image Include="small.ico" />
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="light.hlsl" />
-    <FxCompile Include="shader.hlsl" />
+    <None Include="light.hlsl">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="shader.hlsl">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

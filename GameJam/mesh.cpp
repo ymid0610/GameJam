@@ -14,18 +14,22 @@ namespace
     {
         const UINT vertexBufferSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
 
+        auto defaultHeapProperties1 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto resourceDesc1 = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+            &defaultHeapProperties1,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize),
+            &resourceDesc1,
             D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr,
             IID_PPV_ARGS(&vertexBuffer)));
 
+        auto uploadHeapProperties2 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto resourceDesc2 = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+            &uploadHeapProperties2,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize),
+            &resourceDesc2,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,
             IID_PPV_ARGS(&vertexUploadBuffer)));
@@ -36,9 +40,10 @@ namespace
         vertexData.SlicePitch = vertexData.RowPitch;
         UpdateSubresources<1>(commandList.Get(), vertexBuffer.Get(), vertexUploadBuffer.Get(), 0, 0, 1, &vertexData);
 
-        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(vertexBuffer.Get(),
+        auto resourceBarrier1 = CD3DX12_RESOURCE_BARRIER::Transition(vertexBuffer.Get(),
             D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        commandList->ResourceBarrier(1, &resourceBarrier1);
 
         vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
         vertexBufferView.SizeInBytes = vertexBufferSize;
@@ -54,18 +59,22 @@ namespace
     {
         const UINT indexBufferSize = static_cast<UINT>(indices.size() * sizeof(UINT));
 
+        auto defaultHeapProperties3 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto resourceDesc3 = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+            &defaultHeapProperties3,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize),
+            &resourceDesc3,
             D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr,
             IID_PPV_ARGS(&indexBuffer)));
 
+        auto uploadHeapProperties4 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto resourceDesc4 = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
         Utiles::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+            &uploadHeapProperties4,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize),
+            &resourceDesc4,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,
             IID_PPV_ARGS(&indexUploadBuffer)));
@@ -76,9 +85,10 @@ namespace
         indexData.SlicePitch = indexData.RowPitch;
         UpdateSubresources<1>(commandList.Get(), indexBuffer.Get(), indexUploadBuffer.Get(), 0, 0, 1, &indexData);
 
-        commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(indexBuffer.Get(),
+        auto resourceBarrier2 = CD3DX12_RESOURCE_BARRIER::Transition(indexBuffer.Get(),
             D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_INDEX_BUFFER));
+            D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        commandList->ResourceBarrier(1, &resourceBarrier2);
 
         indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
         indexBufferView.Format = DXGI_FORMAT_R32_UINT;

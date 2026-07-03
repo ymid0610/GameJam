@@ -339,6 +339,11 @@ void Scene::Update(FLOAT timeElapsed)
     UpdateFlashlight();
 }
 
+void Scene::RenderShadowMap(const ComPtr<ID3D12GraphicsCommandList>& commandList)
+{
+    if (m_shadowMap) m_shadowMap->Render(commandList, m_objects);
+}
+
 void Scene::UpdateSpringCamera()
 {
     auto springCamera = dynamic_pointer_cast<SpringArmCamera>(m_camera);
@@ -358,6 +363,13 @@ void Scene::UpdateSpringCamera()
     }
 }
 
+void Scene::MouseButtonEvent(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    (void)hWnd;
+    (void)message;
+    (void)wParam;
+    (void)lParam;
+}
 void Scene::MouseEvent(HWND hWnd, FLOAT timeElapsed)
 {
     if (!m_camera) return;
@@ -672,6 +684,7 @@ void Scene::Render(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
         m_shader->SetLights(lightData);
         m_shader->UpdateShaderVariable(commandList);
     }
+    if (m_shadowMap) m_shadowMap->BindForMainPass(commandList);
 
     for (const auto& object : m_objects)
     {
@@ -813,10 +826,12 @@ void Scene::EnsureDebugLineCapacity(UINT vertexCount) const
     m_debugLineCapacity = max(vertexCount, max(m_debugLineCapacity * 2, 256u));
     const UINT bufferSize = m_debugLineCapacity * sizeof(DebugLineVertex);
 
+    auto uploadHeapProperties1 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    auto resourceDesc1 = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
     Utiles::ThrowIfFailed(m_device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+        &uploadHeapProperties1,
         D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(bufferSize),
+        &resourceDesc1,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
         IID_PPV_ARGS(&m_debugLineVertexBuffer)));
@@ -894,6 +909,7 @@ void Scene::ReleaseObjects()
     m_firstPersonGun.reset();
     m_crosshair.reset();
     m_bullets.clear();
+    m_shadowMap.reset();
     m_collisionManager.reset();
     m_physicsManager.reset();
     m_lights.clear();
@@ -916,4 +932,38 @@ void Scene::ReleaseUploadBuffer()
     {
         if (mesh) mesh->ReleaseUploadBuffer();
     }
+}
+
+TestScene::TestScene()
+{
+}
+
+void TestScene::Update(FLOAT timeElapsed)
+{
+    Scene::Update(timeElapsed);
+    UpdateHelicopterRotorAndLift(timeElapsed);
+    UpdateHelicopterRotorVisual();
+}
+
+void TestScene::ReleaseObjects()
+{
+    m_mainRotor.reset();
+    m_tailRotor.reset();
+    Scene::ReleaseObjects();
+}
+
+void TestScene::BuildObjects(const ComPtr<ID3D12Device>& device,
+    const ComPtr<ID3D12GraphicsCommandList>& commandList,
+    const ComPtr<ID3D12RootSignature>& rootSignature)
+{
+    Scene::BuildObjects(device, commandList, rootSignature);
+}
+
+void TestScene::UpdateHelicopterRotorAndLift(FLOAT timeElapsed)
+{
+    (void)timeElapsed;
+}
+
+void TestScene::UpdateHelicopterRotorVisual()
+{
 }

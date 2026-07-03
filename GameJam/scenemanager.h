@@ -9,6 +9,7 @@ public:
     ~SceneManager() = default;
 
     void Update(FLOAT timeElapsed);
+    void RenderShadowMap(const ComPtr<ID3D12GraphicsCommandList>& commandList);
     void Render(const ComPtr<ID3D12GraphicsCommandList>& commandList) const;
     void ReleaseUploadBuffer();
 
@@ -23,6 +24,7 @@ public:
     void PopScene();
 
     void MouseEvent(HWND hWnd, FLOAT timeElapsed);
+    void MouseButtonEvent(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     void KeyboardEvent(FLOAT timeElapsed);
     void KeyboardEvent(UINT message, WPARAM wParam);
     void MouseWheelEvent(WPARAM wParam);

@@ -5,6 +5,11 @@ void SceneManager::Update(FLOAT timeElapsed)
     if (!m_scenes.empty()) m_scenes.back()->Update(timeElapsed);
 }
 
+void SceneManager::RenderShadowMap(const ComPtr<ID3D12GraphicsCommandList>& commandList)
+{
+    if (!m_scenes.empty()) m_scenes.back()->RenderShadowMap(commandList);
+}
+
 void SceneManager::Render(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
 {
     if (!m_scenes.empty()) m_scenes.back()->Render(commandList);
@@ -43,6 +48,10 @@ void SceneManager::ReleaseUploadBuffer()
 void SceneManager::MouseEvent(HWND hWnd, FLOAT timeElapsed)
 {
     if (!m_scenes.empty()) m_scenes.back()->MouseEvent(hWnd, timeElapsed);
+}
+void SceneManager::MouseButtonEvent(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (!m_scenes.empty()) m_scenes.back()->MouseButtonEvent(hWnd, message, wParam, lParam);
 }
 
 void SceneManager::KeyboardEvent(FLOAT timeElapsed)

@@ -7,7 +7,11 @@ GameObject::GameObject()
 
 void GameObject::Update(FLOAT timeElapsed)
 {
-    (void)timeElapsed;
+    for (const auto& component : m_components)
+    {
+        if (component) component->Update(timeElapsed);
+    }
+
     if (m_collider) m_collider->Update(m_worldMatrix);
 }
 
@@ -22,6 +26,17 @@ void GameObject::Render(const ComPtr<ID3D12GraphicsCommandList>& commandList) co
 {
     if (!m_mesh) return;
 
+    if (m_material) m_material->Apply(commandList);
+    UpdateShaderVariable(commandList);
+    m_mesh->Render(commandList);
+}
+
+void GameObject::RenderWithShader(const ComPtr<ID3D12GraphicsCommandList>& commandList,
+    const shared_ptr<Shader>& shader) const
+{
+    if (!m_mesh || !shader) return;
+
+    shader->UpdateShaderVariable(commandList);
     UpdateShaderVariable(commandList);
     m_mesh->Render(commandList);
 }

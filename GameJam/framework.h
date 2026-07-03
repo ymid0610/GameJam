@@ -14,6 +14,7 @@ public:
     void FrameAdvance();
 
     void MouseEvent(HWND hWnd, FLOAT timeElapsed);
+    void MouseButtonEvent(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     void KeyboardEvent(FLOAT timeElapsed);
     void KeyboardEvent(UINT message, WPARAM wParam);
     void MouseWheelEvent(WPARAM wParam);
