@@ -1,4 +1,5 @@
 #include "material.h"
+#include "binaryreader.h"
 
 namespace
 {
@@ -45,6 +46,56 @@ shared_ptr<Material> Material::Create(const ComPtr<ID3D12Device>& device,
     return material;
 }
 
+shared_ptr<Material> Material::CreateFromAsset(const ComPtr<ID3D12Device>& device,
+    const shared_ptr<Shader>& shader,
+    const string& filePath)
+{
+    auto material = make_shared<Material>(device, shader);
+    BinaryReader reader{ filesystem::path(filePath) };
+
+    while (!reader.End())
+    {
+        string token = reader.ReadString();
+        if (token == "<Name>:")
+        {
+            material->SetName(reader.ReadString());
+        }
+        else if (token == "<BaseColor>:")
+        {
+            material->SetBaseColor(reader.Read<XMFLOAT4>());
+        }
+        else if (token == "<Emission>:")
+        {
+            XMFLOAT4 emission = reader.Read<XMFLOAT4>();
+            material->SetEmission(XMFLOAT3{ emission.x, emission.y, emission.z }, emission.w);
+        }
+        else if (token == "<Surface>:")
+        {
+            material->m_constants.surface = reader.Read<XMFLOAT4>();
+            material->UploadConstants();
+        }
+        else if (token == "<AlbedoTexture>:")
+        {
+            material->SetAlbedoTexturePath(reader.ReadString());
+        }
+        else if (token == "<UseVertexColors>:")
+        {
+            const uint8_t enabled = reader.Read<uint8_t>();
+            if (enabled != 0) material->SetVertexColorAlbedo();
+        }
+        else if (token == "</Material>")
+        {
+            break;
+        }
+        else
+        {
+            throw runtime_error("Unknown material asset token: " + token);
+        }
+    }
+
+    return material;
+}
+
 void Material::Apply(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
 {
     if (m_shader) m_shader->UpdateShaderVariable(commandList);
@@ -77,6 +128,12 @@ void Material::SetTerrainTexture(float tiling)
 {
     m_constants.surface.z = 1.0f;
     m_constants.surface.w = max(0.01f, tiling);
+    UploadConstants();
+}
+
+void Material::SetVertexColorAlbedo()
+{
+    m_constants.surface.z = 2.0f;
     UploadConstants();
 }
 

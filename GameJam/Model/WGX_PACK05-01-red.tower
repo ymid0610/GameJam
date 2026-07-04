@@ -1,0 +1,66 @@
+GameJamTowerModel 1
+Root WGX_PACK05-01-red
+CombinedMesh WGX_PACK05-01-red.bin
+CombinedMaterial WGX_PACK05-01-red.matbin
+Parts 6
+Part BASE
+Mesh WGX_PACK05-01-red__BASE.bin
+Material WGX_PACK05-01-red__BASE.matbin
+Rotates 0
+LocalMatrix
+1 0 0 0
+0 1 0 0
+0 0 1 0
+0 0.103620313 0 1
+EndPart
+Part BASE__TURRET
+Mesh WGX_PACK05-01-red__BASE__TURRET.bin
+Material WGX_PACK05-01-red__BASE__TURRET.matbin
+Rotates 1
+LocalMatrix
+1 0 0 0
+0 1 0 0
+0 0 1 0
+0 0.388058424 0.06818223 1
+EndPart
+Part BASE__TURRET__TUR_01
+Mesh WGX_PACK05-01-red__BASE__TURRET__TUR_01.bin
+Material WGX_PACK05-01-red__BASE__TURRET__TUR_01.matbin
+Rotates 1
+LocalMatrix
+1 0 0 0
+0 1 0 0
+0 0 1 0
+0.456826448 0.670256257 -0.206061363 1
+EndPart
+Part BASE__TURRET__TUR_01__CANON_01
+Mesh WGX_PACK05-01-red__BASE__TURRET__TUR_01__CANON_01.bin
+Material WGX_PACK05-01-red__BASE__TURRET__TUR_01__CANON_01.matbin
+Rotates 1
+LocalMatrix
+1 0 0 0
+0 1 0 0
+0 0 1 0
+0.470170736 0.682989836 0.268128633 1
+EndPart
+Part BASE__TURRET__TUR_02
+Mesh WGX_PACK05-01-red__BASE__TURRET__TUR_02.bin
+Material WGX_PACK05-01-red__BASE__TURRET__TUR_02.matbin
+Rotates 1
+LocalMatrix
+1 0 0 0
+0 1 0 0
+0 0 1 0
+-0.458692074 0.670256197 -0.206061304 1
+EndPart
+Part BASE__TURRET__TUR_02__CANON_02
+Mesh WGX_PACK05-01-red__BASE__TURRET__TUR_02__CANON_02.bin
+Material WGX_PACK05-01-red__BASE__TURRET__TUR_02__CANON_02.matbin
+Rotates 1
+LocalMatrix
+1 0 0 0
+0 1 0 0
+0 0 1 0
+-0.472037315 0.682989836 0.268118262 1
+EndPart
+EndModel

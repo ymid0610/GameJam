@@ -141,9 +141,15 @@ float3 TerrainProceduralAlbedo(PS_INPUT input)
 
 float4 PIXEL_MAIN(PS_INPUT input) : SV_TARGET
 {
-    float useTerrainTexture = step(0.5f, g_materialSurface.z);
+    float materialMode = g_materialSurface.z;
+    float useTerrainTexture = step(0.5f, materialMode) * (1.0f - step(1.5f, materialMode));
+    float useVertexColor = step(1.5f, materialMode);
     float3 terrainColor = TerrainProceduralAlbedo(input);
-    float4 baseColor = float4(lerp(g_materialBaseColor.rgb, terrainColor, useTerrainTexture), g_materialBaseColor.a);
+    float3 vertexColor = saturate(input.color.rgb * g_materialBaseColor.rgb);
+    float3 albedo = lerp(g_materialBaseColor.rgb, terrainColor, useTerrainTexture);
+    albedo = lerp(albedo, vertexColor, useVertexColor);
+    float alpha = lerp(g_materialBaseColor.a, g_materialBaseColor.a * input.color.a, useVertexColor);
+    float4 baseColor = float4(albedo, alpha);
     float4 litColor = ApplyLight(baseColor.rgb, baseColor.a, input.positionW, input.normalW, g_cameraPosition.xyz);
     litColor.rgb = saturate(litColor.rgb + g_materialEmission.rgb * g_materialEmission.a);
     return litColor;
@@ -181,9 +187,15 @@ float SampleShadowVisibility(float4 shadowPosition)
 
 float4 PIXEL_SHADOW_MAIN(PS_INPUT input) : SV_TARGET
 {
-    float useTerrainTexture = step(0.5f, g_materialSurface.z);
+    float materialMode = g_materialSurface.z;
+    float useTerrainTexture = step(0.5f, materialMode) * (1.0f - step(1.5f, materialMode));
+    float useVertexColor = step(1.5f, materialMode);
     float3 terrainColor = TerrainProceduralAlbedo(input);
-    float4 baseColor = float4(lerp(g_materialBaseColor.rgb, terrainColor, useTerrainTexture), g_materialBaseColor.a);
+    float3 vertexColor = saturate(input.color.rgb * g_materialBaseColor.rgb);
+    float3 albedo = lerp(g_materialBaseColor.rgb, terrainColor, useTerrainTexture);
+    albedo = lerp(albedo, vertexColor, useVertexColor);
+    float alpha = lerp(g_materialBaseColor.a, g_materialBaseColor.a * input.color.a, useVertexColor);
+    float4 baseColor = float4(albedo, alpha);
     float4 litColor = ApplyLight(baseColor.rgb, baseColor.a, input.positionW, input.normalW, g_cameraPosition.xyz);
     float shadowVisibility = SampleShadowVisibility(input.shadowPosition);
     float shadowFactor = lerp(g_shadowData.z, 1.0f, shadowVisibility);

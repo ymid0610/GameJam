@@ -162,6 +162,7 @@ BinaryMesh::BinaryMesh(const ComPtr<ID3D12Device>& device,
 
     vector<XMFLOAT3> positions;
     vector<XMFLOAT3> normals;
+    vector<XMFLOAT4> colors;
     vector<UINT> indices;
     bool hasFileBounds = false;
 
@@ -187,6 +188,11 @@ BinaryMesh::BinaryMesh(const ComPtr<ID3D12Device>& device,
         {
             int count = reader.Read<int>();
             normals = reader.ReadVector<XMFLOAT3>(max(count, 0));
+        }
+        else if (token == "<Colors>:")
+        {
+            int count = reader.Read<int>();
+            colors = reader.ReadVector<XMFLOAT4>(max(count, 0));
         }
         else if (token == "<TextureCoords>:")
         {
@@ -276,6 +282,11 @@ BinaryMesh::BinaryMesh(const ComPtr<ID3D12Device>& device,
         normals.assign(positions.size(), XMFLOAT3{ 0.0f, 1.0f, 0.0f });
     }
 
+    if (colors.size() != positions.size())
+    {
+        colors.assign(positions.size(), color);
+    }
+
     if (indices.empty())
     {
         indices.reserve(positions.size());
@@ -286,7 +297,16 @@ BinaryMesh::BinaryMesh(const ComPtr<ID3D12Device>& device,
     vertices.reserve(positions.size());
     for (size_t i = 0; i < positions.size(); ++i)
     {
-        vertices.push_back({ positions[i], normals[i], color });
+        vertices.push_back({
+            positions[i],
+            normals[i],
+            XMFLOAT4{
+                colors[i].x * color.x,
+                colors[i].y * color.y,
+                colors[i].z * color.z,
+                colors[i].w * color.w
+            }
+            });
     }
 
     m_localTriangles.clear();

@@ -16,6 +16,9 @@ public:
     static shared_ptr<Material> Create(const ComPtr<ID3D12Device>& device,
         const shared_ptr<Shader>& shader,
         const XMFLOAT4& baseColor = XMFLOAT4{ 1.0f, 1.0f, 1.0f, 1.0f });
+    static shared_ptr<Material> CreateFromAsset(const ComPtr<ID3D12Device>& device,
+        const shared_ptr<Shader>& shader,
+        const string& filePath);
 
     void Apply(const ComPtr<ID3D12GraphicsCommandList>& commandList) const;
 
@@ -29,11 +32,14 @@ public:
     void SetEmission(const XMFLOAT3& color, float intensity = 1.0f);
     void SetSurface(float metallic, float roughness);
     void SetTerrainTexture(float tiling = 0.20f);
+    void SetVertexColorAlbedo();
+    void SetAlbedoTexturePath(string path) { m_albedoTexturePath = std::move(path); }
 
     const XMFLOAT4& GetBaseColor() const { return m_constants.baseColor; }
     const XMFLOAT4& GetEmission() const { return m_constants.emission; }
     float GetMetallic() const { return m_constants.surface.x; }
     float GetRoughness() const { return m_constants.surface.y; }
+    const string& GetAlbedoTexturePath() const { return m_albedoTexturePath; }
     const MaterialConstants& GetConstants() const { return m_constants; }
 
 private:
@@ -41,6 +47,7 @@ private:
 
 private:
     string m_name;
+    string m_albedoTexturePath;
     shared_ptr<Shader> m_shader;
     MaterialConstants m_constants{};
     ComPtr<ID3D12Resource> m_constantBuffer;
