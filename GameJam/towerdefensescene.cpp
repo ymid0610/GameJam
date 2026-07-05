@@ -3,6 +3,7 @@
 #include "towerdefenseroute.h"
 
 #include <cctype>
+#include <cfloat>
 #include <filesystem>
 #include <fstream>
 
@@ -130,23 +131,273 @@ namespace
         switch (offer.kind)
         {
         case TowerDefenseOfferKind::Meteor:
-            return L"MET";
+            return L"METEO";
         case TowerDefenseOfferKind::Freeze:
-            return L"ICE";
+            return L"SLOW";
         case TowerDefenseOfferKind::Boost:
-            return L"PWR";
+            return L"POWER";
         case TowerDefenseOfferKind::Generator:
-            return L"GEN";
+            return L"COIN";
+        case TowerDefenseOfferKind::Boulder:
+            return L"ROCK";
         default:
             return TowerTypeShortName(offer.type);
         }
+    }
+
+    const wchar_t* StagePresetName(int stage)
+    {
+        static constexpr const wchar_t* Names[3] = { L"MEADOW", L"RIDGE", L"SPIRAL" };
+        return Names[clamp(stage, 0, 2)];
+    }
+
+    const wchar_t* DifficultyPresetName(int difficulty)
+    {
+        static constexpr const wchar_t* Names[3] = { L"EASY", L"NORMAL", L"HARD" };
+        return Names[clamp(difficulty, 0, 2)];
+    }
+
+    float StageStartX(int stage)
+    {
+        static constexpr float Values[3] = { TowerDefenseRoute::StartX, 0.035f, 0.025f };
+        return Values[clamp(stage, 0, 2)];
+    }
+
+    float StageMeetX(int stage)
+    {
+        static constexpr float Values[3] = { TowerDefenseRoute::MeetX, 0.455f, 0.565f };
+        return Values[clamp(stage, 0, 2)];
+    }
+
+    float StageEndX(int stage)
+    {
+        static constexpr float Values[3] = { TowerDefenseRoute::EndX, 0.965f, 0.975f };
+        return Values[clamp(stage, 0, 2)];
+    }
+
+    float StageBranchStartZ(int stage, int routeIndex)
+    {
+        static constexpr float Starts[3][TowerDefenseRoute::RouteCount] = {
+            { 0.22f, 0.50f, 0.78f },
+            { 0.16f, 0.48f, 0.84f },
+            { 0.30f, 0.51f, 0.70f }
+        };
+        return Starts[clamp(stage, 0, 2)][clamp(routeIndex, 0, TowerDefenseRoute::RouteCount - 1)];
+    }
+
+    float StageSharedZ(int stage, float t)
+    {
+        t = clamp(t, 0.0f, 1.0f);
+        switch (clamp(stage, 0, 2))
+        {
+        case 1:
+            return TowerDefenseRoute::MeetZ + sinf(t * XM_PI * 0.82f) * 0.038f - t * 0.055f;
+        case 2:
+            return TowerDefenseRoute::MeetZ + sinf((t * 1.80f + 0.15f) * XM_PI) * 0.105f;
+        default:
+            return TowerDefenseRoute::SharedZ(t);
+        }
+    }
+
+    float StageRouteCenterZ(int stage, int routeIndex, float normalizedX)
+    {
+        stage = clamp(stage, 0, 2);
+        const float startX = StageStartX(stage);
+        const float meetX = StageMeetX(stage);
+        const float endX = StageEndX(stage);
+        if (normalizedX <= meetX)
+        {
+            const float t = (normalizedX - startX) / max(0.001f, meetX - startX);
+            const float startZ = StageBranchStartZ(stage, routeIndex);
+            float center = startZ + (TowerDefenseRoute::MeetZ - startZ) * TowerDefenseRoute::Smooth01(t);
+            if (stage == 1) center += sinf(t * XM_PI * 2.0f) * 0.030f;
+            if (stage == 2) center += sinf((t + routeIndex * 0.17f) * XM_PI * 1.4f) * 0.045f;
+            return center;
+        }
+
+        const float t = (normalizedX - meetX) / max(0.001f, endX - meetX);
+        return StageSharedZ(stage, t);
+    }
+
+    XMFLOAT2 StagePathPointNormalized(int stage, int routeIndex, float t)
+    {
+        stage = clamp(stage, 0, 2);
+        routeIndex = clamp(routeIndex, 0, TowerDefenseRoute::RouteCount - 1);
+        t = clamp(t, 0.0f, 1.0f);
+
+        if (stage == 2)
+        {
+            const float startZ = StageBranchStartZ(stage, routeIndex);
+            if (t < 0.22f)
+            {
+                const float a = TowerDefenseRoute::Smooth01(t / 0.22f);
+                return XMFLOAT2{
+                    StageStartX(stage) + (0.36f - StageStartX(stage)) * a,
+                    startZ + (0.50f - startZ) * a
+                };
+            }
+            if (t < 0.78f)
+            {
+                const float a = (t - 0.22f) / 0.56f;
+                const float loops = 1.55f;
+                const float angle = XM_2PI * loops * a + static_cast<float>(routeIndex) * 0.46f;
+                const float radius = 0.245f - 0.080f * a;
+                return XMFLOAT2{
+                    0.50f + cosf(angle) * radius,
+                    0.50f + sinf(angle) * radius
+                };
+            }
+
+            const float a = TowerDefenseRoute::Smooth01((t - 0.78f) / 0.22f);
+            const float startAngle = XM_2PI * 1.55f + static_cast<float>(routeIndex) * 0.46f;
+            const XMFLOAT2 spiralEnd{
+                0.50f + cosf(startAngle) * 0.165f,
+                0.50f + sinf(startAngle) * 0.165f
+            };
+            return XMFLOAT2{
+                spiralEnd.x + (StageEndX(stage) - spiralEnd.x) * a,
+                spiralEnd.y + (0.50f - spiralEnd.y) * a
+            };
+        }
+
+        const float startX = StageStartX(stage);
+        const float meetX = StageMeetX(stage);
+        const float endX = StageEndX(stage);
+        const float split = 0.50f;
+        float x = 0.0f;
+        if (t <= split)
+        {
+            const float a = t / split;
+            x = startX + (meetX - startX) * a;
+        }
+        else
+        {
+            const float a = (t - split) / (1.0f - split);
+            x = meetX + (endX - meetX) * a;
+        }
+
+        return XMFLOAT2{ x, clamp(StageRouteCenterZ(stage, routeIndex, x), 0.08f, 0.92f) };
+    }
+
+    float DistancePointToSegmentSq2D(const XMFLOAT2& point, const XMFLOAT2& a, const XMFLOAT2& b)
+    {
+        const float abx = b.x - a.x;
+        const float abz = b.y - a.y;
+        const float lengthSq = abx * abx + abz * abz;
+        if (lengthSq <= 0.000001f)
+        {
+            const float dx = point.x - a.x;
+            const float dz = point.y - a.y;
+            return dx * dx + dz * dz;
+        }
+
+        float u = ((point.x - a.x) * abx + (point.y - a.y) * abz) / lengthSq;
+        u = clamp(u, 0.0f, 1.0f);
+        const float cx = a.x + abx * u;
+        const float cz = a.y + abz * u;
+        const float dx = point.x - cx;
+        const float dz = point.y - cz;
+        return dx * dx + dz * dz;
+    }
+
+    float StageRoadMask(int stage, float nx, float nz, float innerHalfWidth, float outerHalfWidth)
+    {
+        if (stage == 2)
+        {
+            const XMFLOAT2 point{ nx, nz };
+            float bestDistanceSq = outerHalfWidth * outerHalfWidth * 4.0f;
+            for (int route = 0; route < TowerDefenseRoute::RouteCount; ++route)
+            {
+                XMFLOAT2 previous = StagePathPointNormalized(stage, route, 0.0f);
+                for (int i = 1; i <= 72; ++i)
+                {
+                    const float t = static_cast<float>(i) / 72.0f;
+                    const XMFLOAT2 current = StagePathPointNormalized(stage, route, t);
+                    bestDistanceSq = min(bestDistanceSq, DistancePointToSegmentSq2D(point, previous, current));
+                    previous = current;
+                }
+            }
+
+            const float distance = sqrtf(max(0.0f, bestDistanceSq));
+            const float edge = 1.0f - TowerDefenseRoute::Smooth01((distance - innerHalfWidth) / max(0.001f, outerHalfWidth - innerHalfWidth));
+            return clamp(edge, 0.0f, 1.0f);
+        }
+
+        if (nx < StageStartX(stage) - 0.006f || nx > StageEndX(stage) + 0.015f) return 0.0f;
+
+        float mask = 0.0f;
+        for (int route = 0; route < TowerDefenseRoute::RouteCount; ++route)
+        {
+            const float offset = fabsf(nz - StageRouteCenterZ(stage, route, nx));
+            const float edge = 1.0f - TowerDefenseRoute::Smooth01((offset - innerHalfWidth) / max(0.001f, outerHalfWidth - innerHalfWidth));
+            mask = max(mask, clamp(edge, 0.0f, 1.0f));
+        }
+        return mask;
+    }
+
+    shared_ptr<TerrainHeightMap> CreateStageHeightMap(int stage, UINT width, UINT length, float cellSpacing)
+    {
+        stage = clamp(stage, 0, 2);
+        width = max(width, 2u);
+        length = max(length, 2u);
+
+        vector<float> heights(static_cast<size_t>(width) * length);
+        vector<float> roadMask(heights.size());
+        const float amplitude[3]{ 2.15f, 2.85f, 2.45f };
+        const float ridgeStrength[3]{ 0.72f, 1.42f, 0.92f };
+        const float worldWidth = static_cast<float>(width - 1) * cellSpacing;
+
+        for (UINT z = 0; z < length; ++z)
+        {
+            for (UINT x = 0; x < width; ++x)
+            {
+                const float nx = static_cast<float>(x) / static_cast<float>(width - 1);
+                const float nz = static_cast<float>(z) / static_cast<float>(length - 1);
+                const float waveA = sinf((nx * (2.25f + stage * 0.35f) + nz * 0.45f) * XM_2PI);
+                const float waveB = cosf((nz * (2.60f + stage * 0.20f) - nx * 0.28f) * XM_2PI);
+                const float ridgeLine = 1.0f - fabsf(sinf((nx * 1.32f + nz * (0.78f + stage * 0.17f)) * XM_2PI));
+                const float ridge = powf(max(0.0f, ridgeLine), 3.0f) * ridgeStrength[stage];
+                const float hillA = expf(-17.0f * ((nx - 0.22f) * (nx - 0.22f) + (nz - 0.25f) * (nz - 0.25f)));
+                const float hillB = expf(-13.0f * ((nx - 0.76f) * (nx - 0.76f) + (nz - 0.76f) * (nz - 0.76f)));
+                const float basin = -0.62f * expf(-14.0f * ((nx - 0.54f) * (nx - 0.54f) + (nz - 0.54f) * (nz - 0.54f)));
+                const float road = StageRoadMask(stage, nx, nz, 0.018f, 0.070f);
+                const float roadCore = StageRoadMask(stage, nx, nz, 0.010f, 0.046f);
+                const float naturalHeight = waveA * 0.32f + waveB * 0.24f + ridge + hillA * 0.88f + hillB * 0.75f + basin;
+                const float roadHeight = waveA * 0.050f + waveB * 0.038f - 0.42f * road + basin * 0.22f;
+                const float blend = roadCore * 0.86f;
+                const size_t index = static_cast<size_t>(z) * width + x;
+                float height = (naturalHeight + (roadHeight - naturalHeight) * blend) * amplitude[stage];
+                if (stage == 1)
+                {
+                    const float downhill = (1.0f - nx) * worldWidth * 0.50f;
+                    const float ridgeShelf = expf(-18.0f * ((nx - 0.18f) * (nx - 0.18f))) * 3.8f;
+                    height += downhill + ridgeShelf;
+                    height -= road * 1.35f;
+                }
+                else if (stage == 2)
+                {
+                    const float dx = nx - 0.50f;
+                    const float dz = nz - 0.50f;
+                    const float radial = sqrtf(dx * dx + dz * dz);
+                    const float outerWall = powf(clamp((radial - 0.22f) / 0.34f, 0.0f, 1.0f), 1.8f) * 5.2f;
+                    const float innerBasin = -2.5f * expf(-18.0f * radial * radial);
+                    height += outerWall + innerBasin - road * 0.85f;
+                }
+
+                heights[index] = height;
+                roadMask[index] = road;
+            }
+        }
+
+        return make_shared<TerrainHeightMap>(width, length, cellSpacing, std::move(heights), std::move(roadMask));
     }
 
     bool IsConsumableOffer(TowerDefenseOfferKind kind)
     {
         return kind == TowerDefenseOfferKind::Meteor ||
             kind == TowerDefenseOfferKind::Freeze ||
-            kind == TowerDefenseOfferKind::Boost;
+            kind == TowerDefenseOfferKind::Boost ||
+            kind == TowerDefenseOfferKind::Boulder;
     }
 
     float MeteorRadius(int tier)
@@ -183,6 +434,24 @@ namespace
     {
         tier = clamp(tier, 1, 3);
         return 1.25f + static_cast<float>(tier) * 0.18f;
+    }
+
+    float BoulderRadius(int tier)
+    {
+        tier = clamp(tier, 1, 3);
+        return 0.62f + static_cast<float>(tier) * 0.18f;
+    }
+
+    float BoulderDamage(int tier, int wave)
+    {
+        tier = clamp(tier, 1, 3);
+        return 64.0f + static_cast<float>(tier) * 42.0f + static_cast<float>(max(1, wave) - 1) * 13.0f;
+    }
+
+    float BoulderSpeed(int tier)
+    {
+        tier = clamp(tier, 1, 3);
+        return 4.4f + static_cast<float>(tier) * 0.78f;
     }
 
     float GeneratorInterval(int tier)
@@ -592,9 +861,8 @@ void TowerDefenseScene::BuildObjects(const ComPtr<ID3D12Device>& device,
     m_cube = make_shared<CubeMesh>(device, commandList);
     m_capsuleMesh = make_shared<CapsuleIndexMesh>(device, commandList,
         EnemyCapsuleRadius, EnemyCapsuleBodyHeight, 20);
-    m_terrainHeightMap = TerrainHeightMap::CreateWaveField(TerrainSamples, TerrainSamples,
-        TerrainCellSpacing, 2.25f, 2.50f);
-    m_terrainMesh = make_shared<TerrainMesh>(device, commandList, m_terrainHeightMap);
+    m_boulderMesh = make_shared<CapsuleIndexMesh>(device, commandList, 1.0f, 0.0f, 28);
+    BuildStageTerrainAssets(device, commandList);
 
     m_camera = make_shared<SpectatorCamera>();
     ConfigureCameraLens(m_camera);
@@ -630,11 +898,11 @@ void TowerDefenseScene::BuildMaterials(const ComPtr<ID3D12Device>& device)
     m_fieldMaterial = Material::Create(device, m_shader, XMFLOAT4{ 1.0f, 1.0f, 1.0f, 1.0f });
     m_fieldMaterial->SetTerrainTexture(0.18f);
     m_blockedMaterial = Material::Create(device, m_shader, XMFLOAT4{ 0.24f, 0.29f, 0.36f, 1.0f });
-    m_shopPanelMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.06f, 0.075f, 0.09f, 0.84f });
-    m_shopPanelMaterial->SetEmission(XMFLOAT3{ 0.02f, 0.08f, 0.12f }, 0.30f);
-    m_shopSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.16f, 0.18f, 0.20f, 0.88f });
-    m_shopSlotMaterial->SetEmission(XMFLOAT3{ 0.04f, 0.09f, 0.12f }, 0.38f);
-    m_infoBarBackgroundMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.08f, 0.095f, 0.11f, 0.92f });
+    m_shopPanelMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.025f, 0.032f, 0.040f, 0.94f });
+    m_shopPanelMaterial->SetEmission(XMFLOAT3{ 0.01f, 0.05f, 0.08f }, 0.22f);
+    m_shopSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.13f, 0.16f, 0.19f, 0.94f });
+    m_shopSlotMaterial->SetEmission(XMFLOAT3{ 0.04f, 0.10f, 0.14f }, 0.42f);
+    m_infoBarBackgroundMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.010f, 0.014f, 0.018f, 0.96f });
     m_infoDamageMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.34f, 0.22f, 0.95f });
     m_infoDamageMaterial->SetEmission(XMFLOAT3{ 0.55f, 0.08f, 0.04f }, 0.25f);
     m_infoRangeMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.18f, 0.92f, 1.0f, 0.95f });
@@ -664,10 +932,10 @@ void TowerDefenseScene::BuildMaterials(const ComPtr<ID3D12Device>& device)
     m_coinMaterial->SetEmission(XMFLOAT3{ 1.0f, 0.58f, 0.04f }, 1.65f);
     m_goldUiMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.82f, 0.16f, 0.95f });
     m_goldUiMaterial->SetEmission(XMFLOAT3{ 0.90f, 0.48f, 0.04f }, 0.70f);
-    m_goldDigitMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.94f, 0.38f, 0.98f });
-    m_goldDigitMaterial->SetEmission(XMFLOAT3{ 0.82f, 0.58f, 0.12f }, 0.60f);
-    m_bitmapTextMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.96f, 0.72f, 0.98f });
-    m_bitmapTextMaterial->SetEmission(XMFLOAT3{ 0.85f, 0.62f, 0.20f }, 0.62f);
+    m_goldDigitMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.92f, 0.22f, 1.0f });
+    m_goldDigitMaterial->SetEmission(XMFLOAT3{ 1.0f, 0.65f, 0.08f }, 0.88f);
+    m_bitmapTextMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.98f, 1.0f, 0.96f, 1.0f });
+    m_bitmapTextMaterial->SetEmission(XMFLOAT3{ 0.82f, 0.95f, 0.78f }, 0.78f);
     m_resultVictoryMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.18f, 0.95f, 0.38f, 0.88f });
     m_resultVictoryMaterial->SetEmission(XMFLOAT3{ 0.08f, 0.70f, 0.20f }, 0.70f);
     m_resultDefeatMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.22f, 0.18f, 0.88f });
@@ -700,6 +968,10 @@ void TowerDefenseScene::BuildMaterials(const ComPtr<ID3D12Device>& device)
     m_boostMaterial->SetEmission(XMFLOAT3{ 0.12f, 0.86f, 0.12f }, 1.35f);
     m_boostUiMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.36f, 1.0f, 0.28f, 0.96f });
     m_boostUiMaterial->SetEmission(XMFLOAT3{ 0.12f, 0.76f, 0.08f }, 0.82f);
+    m_boulderMaterial = Material::Create(device, m_shader, XMFLOAT4{ 0.50f, 0.47f, 0.40f, 1.0f });
+    m_boulderMaterial->SetEmission(XMFLOAT3{ 0.08f, 0.07f, 0.05f }, 0.22f);
+    m_boulderUiMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.56f, 0.52f, 0.42f, 0.96f });
+    m_boulderUiMaterial->SetEmission(XMFLOAT3{ 0.18f, 0.14f, 0.08f }, 0.45f);
     m_generatorMaterial = Material::Create(device, m_shader, XMFLOAT4{ 1.0f, 0.76f, 0.18f, 1.0f });
     m_generatorMaterial->SetEmission(XMFLOAT3{ 0.92f, 0.46f, 0.05f }, 0.85f);
     m_generatorUiMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.78f, 0.20f, 0.96f });
@@ -753,28 +1025,19 @@ void TowerDefenseScene::BuildPath()
 
     const float width = m_terrainHeightMap->GetWorldWidth();
     const float length = m_terrainHeightMap->GetWorldLength();
-    constexpr int BranchWaypointCount = 16;
-    constexpr int SharedWaypointCount = 16;
+    const int stage = clamp(m_selectedStage, 0, StagePresetCount - 1);
+    const int waypointCount = stage == 2 ? 58 : 34;
 
     for (int route = 0; route < TowerDefenseRoute::RouteCount; ++route)
     {
         vector<XMFLOAT3> path;
-        path.reserve(BranchWaypointCount + SharedWaypointCount);
+        path.reserve(waypointCount);
 
-        for (int i = 0; i < BranchWaypointCount; ++i)
+        for (int i = 0; i < waypointCount; ++i)
         {
-            float t = static_cast<float>(i) / static_cast<float>(BranchWaypointCount - 1);
-            float normalizedX = TowerDefenseRoute::StartX + t * (TowerDefenseRoute::MeetX - TowerDefenseRoute::StartX);
-            float normalizedZ = clamp(TowerDefenseRoute::CenterZ(route, normalizedX), 0.08f, 0.92f);
-            path.push_back(TerrainWorldPosition(width * normalizedX, length * normalizedZ, EnemyHalfHeight));
-        }
-
-        for (int i = 1; i < SharedWaypointCount; ++i)
-        {
-            float t = static_cast<float>(i) / static_cast<float>(SharedWaypointCount - 1);
-            float normalizedX = TowerDefenseRoute::MeetX + t * (TowerDefenseRoute::EndX - TowerDefenseRoute::MeetX);
-            float normalizedZ = clamp(TowerDefenseRoute::CenterZ(route, normalizedX), 0.08f, 0.92f);
-            path.push_back(TerrainWorldPosition(width * normalizedX, length * normalizedZ, EnemyHalfHeight));
+            const float t = static_cast<float>(i) / static_cast<float>(waypointCount - 1);
+            const XMFLOAT2 point = StagePathPointNormalized(stage, route, t);
+            path.push_back(TerrainWorldPosition(width * point.x, length * point.y, EnemyHalfHeight));
         }
 
         if (route == 1) m_waypoints = path;
@@ -790,6 +1053,8 @@ void TowerDefenseScene::BuildStartScreen()
     m_generators.clear();
     m_enemies.clear();
     m_hitMarkers.clear();
+    m_damagePopups.clear();
+    m_rollingBoulders.clear();
     m_scopeMarkers.clear();
     m_projectiles.clear();
     m_waypoints.clear();
@@ -811,6 +1076,7 @@ void TowerDefenseScene::BuildStartScreen()
     m_rightMouseOrbiting = false;
     m_shopCollapsed = false;
     m_topDownView = false;
+    m_gameSpeedIndex = 0;
     m_cameraYaw = 0.0f;
     m_cameraPitch = DefaultOrbitPitch;
     m_cameraShakeTimer = 0.0f;
@@ -863,6 +1129,16 @@ void TowerDefenseScene::BuildStartScreen()
         XMFLOAT3{ -0.25f, 0.62f, 0.18f },
         XMFLOAT3{ 0.23f, 0.12f, 0.23f },
         m_startAccentMaterial));
+
+    m_hudWidgets.clear();
+    m_hudWidgets.reserve(48);
+    for (int i = 0; i < 48; ++i)
+    {
+        m_hudWidgets.push_back(CreateCubeObject("Start Menu Widget",
+            XMFLOAT3{ 0.0f, -1000.0f, 0.0f },
+            XMFLOAT3{ 1.0f, 1.0f, 1.0f },
+            m_shopPanelMaterial));
+    }
 }
 
 void TowerDefenseScene::StartGame()
@@ -873,6 +1149,8 @@ void TowerDefenseScene::StartGame()
     m_generators.clear();
     m_enemies.clear();
     m_hitMarkers.clear();
+    m_damagePopups.clear();
+    m_rollingBoulders.clear();
     m_scopeMarkers.clear();
     m_projectiles.clear();
     ClearDragGhost();
@@ -892,6 +1170,7 @@ void TowerDefenseScene::StartGame()
     m_moonObject.reset();
     m_rightMouseOrbiting = false;
     m_topDownView = false;
+    m_gameSpeedIndex = 0;
     m_cameraYaw = 0.0f;
     m_cameraPitch = DefaultOrbitPitch;
     m_cameraShakeTimer = 0.0f;
@@ -909,8 +1188,25 @@ void TowerDefenseScene::StartGame()
     m_spawnTimer = 0.0f;
     m_wave = 1;
     m_spawnedInWave = 0;
-    m_lives = 25;
-    m_gold = 14;
+    m_selectedStage = clamp(m_selectedStage, 0, StagePresetCount - 1);
+    if (m_selectedStage < static_cast<int>(m_stageHeightMaps.size()) &&
+        m_selectedStage < static_cast<int>(m_stageTerrainMeshes.size()))
+    {
+        m_terrainHeightMap = m_stageHeightMaps[m_selectedStage];
+        m_terrainMesh = m_stageTerrainMeshes[m_selectedStage];
+    }
+    else if (!m_stageHeightMaps.empty() && !m_stageTerrainMeshes.empty())
+    {
+        m_terrainHeightMap = m_stageHeightMaps.front();
+        m_terrainMesh = m_stageTerrainMeshes.front();
+    }
+
+    m_selectedDifficulty = clamp(m_selectedDifficulty, 0, DifficultyPresetCount - 1);
+    static constexpr int StartingLives[DifficultyPresetCount]{ 30, 25, 20 };
+    static constexpr int StartingGold[DifficultyPresetCount]{ 18, 14, 12 };
+    m_maxLives = StartingLives[m_selectedDifficulty];
+    m_lives = m_maxLives;
+    m_gold = StartingGold[m_selectedDifficulty];
     m_waveRunning = false;
     m_bossRewardPending = false;
     m_bossRewardWave = 0;
@@ -1138,13 +1434,36 @@ void TowerDefenseScene::BuildBossHealthUI()
 void TowerDefenseScene::BuildBitmapTextPool()
 {
     m_bitmapTextRects.clear();
-    m_bitmapTextRects.reserve(2800);
-    for (int i = 0; i < 2800; ++i)
+    m_bitmapTextRects.reserve(12000);
+    for (int i = 0; i < 12000; ++i)
     {
         m_bitmapTextRects.push_back(CreateCubeObject("Bitmap Text Rect",
             XMFLOAT3{ 0.0f, -1000.0f, 0.0f },
             XMFLOAT3{ 1.0f, 1.0f, 1.0f },
             m_bitmapTextMaterial));
+    }
+}
+
+void TowerDefenseScene::BuildStageTerrainAssets(const ComPtr<ID3D12Device>& device,
+    const ComPtr<ID3D12GraphicsCommandList>& commandList)
+{
+    m_stageHeightMaps.clear();
+    m_stageTerrainMeshes.clear();
+    m_stageHeightMaps.reserve(StagePresetCount);
+    m_stageTerrainMeshes.reserve(StagePresetCount);
+
+    for (int stage = 0; stage < StagePresetCount; ++stage)
+    {
+        auto heightMap = CreateStageHeightMap(stage, TerrainSamples, TerrainSamples, TerrainCellSpacing);
+        m_stageHeightMaps.push_back(heightMap);
+        m_stageTerrainMeshes.push_back(make_shared<TerrainMesh>(device, commandList, heightMap));
+    }
+
+    m_selectedStage = clamp(m_selectedStage, 0, StagePresetCount - 1);
+    if (!m_stageHeightMaps.empty())
+    {
+        m_terrainHeightMap = m_stageHeightMaps[m_selectedStage];
+        m_terrainMesh = m_stageTerrainMeshes[m_selectedStage];
     }
 }
 
@@ -1474,6 +1793,13 @@ TowerDefenseOffer TowerDefenseScene::CreateRandomOffer() const
         offer.cost = 3 + tier * 2;
         return offer;
     }
+    if (kindRoll < 0.41f)
+    {
+        offer.kind = TowerDefenseOfferKind::Boulder;
+        offer.type = TowerDefenseTowerType::Splash;
+        offer.cost = 5 + tier * 3 + max(0, m_wave - 1) / 3;
+        return offer;
+    }
 
     const int typeIndex = Utiles::Random::GetInt(0, TowerTypeCount - 1);
     offer.kind = TowerDefenseOfferKind::Tower;
@@ -1489,6 +1815,7 @@ TowerDefenseOffer TowerDefenseScene::CreateRandomOffer() const
 void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
 {
     if (m_mode != TowerDefenseMode::Playing || !m_camera || !g_framework) return;
+    if (m_bossRewardPending || m_waveRewardPending) return;
 
     const float width = static_cast<float>(g_framework->GetWindowWidth());
     const float height = static_cast<float>(g_framework->GetWindowHeight());
@@ -1528,6 +1855,7 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
     }
 
     size_t objectIndex = 0;
+    size_t markerWidgetIndex = 96;
     for (int slot = 1; slot <= 3; ++slot)
     {
         XMFLOAT2 slotCenter{};
@@ -1555,6 +1883,7 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
                 normalizedSlotSize,
                 4.05f,
                 0.030f);
+            m_shopSlots[objectIndex]->SetMesh(m_cube);
             m_shopSlots[objectIndex]->SetMaterial(slotMaterial);
             m_shopSlots[objectIndex]->SetWorldMatrix(slotWorld);
             m_shopSlots[objectIndex]->Render(commandList);
@@ -1569,20 +1898,35 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
             const float iconScale = offer.kind != TowerDefenseOfferKind::Tower
                 ? 0.64f + static_cast<float>(offerTier) * 0.08f
                 : 0.56f + static_cast<float>(offerTier) * 0.10f;
-            XMFLOAT4X4 iconWorld = BuildCameraAnchoredUiMatrix(
-                normalizedCenter,
-                XMFLOAT2{ normalizedSlotSize.x * iconScale, normalizedSlotSize.y * iconScale },
-                3.92f,
-                0.12f);
-            const shared_ptr<Material>& iconMaterial =
-                offer.kind == TowerDefenseOfferKind::Meteor ? m_meteorUiMaterial :
-                offer.kind == TowerDefenseOfferKind::Freeze ? m_freezeUiMaterial :
-                offer.kind == TowerDefenseOfferKind::Boost ? m_boostUiMaterial :
-                offer.kind == TowerDefenseOfferKind::Generator ? m_generatorUiMaterial :
-                m_shopTowerMaterials[offerType][offerTier - 1];
-            m_shopSlots[objectIndex]->SetMaterial(iconMaterial);
-            m_shopSlots[objectIndex]->SetWorldMatrix(iconWorld);
-            m_shopSlots[objectIndex]->Render(commandList);
+            if (offer.kind == TowerDefenseOfferKind::Tower && m_towerModelMesh)
+            {
+                RenderTowerModelIcon(commandList,
+                    m_shopSlots[objectIndex],
+                    offer.type,
+                    offerTier,
+                    XMFLOAT2{ normalizedCenter.x, normalizedCenter.y - normalizedSlotSize.y * 0.03f },
+                    normalizedSlotSize.y * iconScale * 0.92f,
+                    3.86f);
+            }
+            else
+            {
+                XMFLOAT4X4 iconWorld = BuildCameraAnchoredUiMatrix(
+                    normalizedCenter,
+                    XMFLOAT2{ normalizedSlotSize.x * iconScale, normalizedSlotSize.y * iconScale },
+                    3.92f,
+                    0.12f);
+                const shared_ptr<Material>& iconMaterial =
+                    offer.kind == TowerDefenseOfferKind::Meteor ? m_meteorUiMaterial :
+                    offer.kind == TowerDefenseOfferKind::Freeze ? m_freezeUiMaterial :
+                    offer.kind == TowerDefenseOfferKind::Boost ? m_boostUiMaterial :
+                    offer.kind == TowerDefenseOfferKind::Boulder ? m_boulderUiMaterial :
+                    offer.kind == TowerDefenseOfferKind::Generator ? m_generatorUiMaterial :
+                    m_shopTowerMaterials[offerType][offerTier - 1];
+                m_shopSlots[objectIndex]->SetMesh(m_cube);
+                m_shopSlots[objectIndex]->SetMaterial(iconMaterial);
+                m_shopSlots[objectIndex]->SetWorldMatrix(iconWorld);
+                m_shopSlots[objectIndex]->Render(commandList);
+            }
 
             WCHAR costText[16]{};
             swprintf_s(costText, L"%dC", offer.cost);
@@ -1591,17 +1935,16 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
                 XMFLOAT2{ normalizedCenter.x, normalizedCenter.y + normalizedSlotSize.y * 0.25f },
                 0.025f,
                 3.72f,
-                m_goldDigitMaterial,
+                m_gold >= offer.cost ? m_goldDigitMaterial : m_lifeUiMaterial,
                 0.5f);
 
-            wstring starText(static_cast<size_t>(offerTier), static_cast<wchar_t>(0x2605));
-            RenderBitmapText(commandList,
-                starText,
+            RenderTierMarkers(commandList,
                 XMFLOAT2{ normalizedCenter.x, normalizedCenter.y - normalizedSlotSize.y * 0.43f },
-                0.030f,
-                3.70f,
-                m_goldDigitMaterial,
-                0.5f);
+                offerTier,
+                0.0065f,
+                0.019f,
+                3.68f,
+                markerWidgetIndex);
 
             RenderBitmapText(commandList,
                 OfferShortName(offer),
@@ -1777,6 +2120,7 @@ void TowerDefenseScene::RenderTowerInfoUI(const ComPtr<ID3D12GraphicsCommandList
         {
             const size_t index = WidgetIndex(widget);
             if (index >= m_towerInfoWidgets.size() || !m_towerInfoWidgets[index]) return;
+            m_towerInfoWidgets[index]->SetMesh(m_cube);
             if (material) m_towerInfoWidgets[index]->SetMaterial(material);
 
             XMFLOAT4X4 world = BuildCameraAnchoredUiMatrix(center, size, depth, thickness);
@@ -1794,18 +2138,34 @@ void TowerDefenseScene::RenderTowerInfoUI(const ComPtr<ID3D12GraphicsCommandList
     const int tier = clamp(tower->tier, 1, 3);
     const int typeIndex = TowerTypeIndex(tower->type);
     const float iconScale = 0.048f + static_cast<float>(tier) * 0.007f;
-    renderWidget(TowerInfoWidget::TowerIcon,
-        XMFLOAT2{ 0.728f, 0.075f },
-        XMFLOAT2{ iconScale, iconScale * 1.18f },
-        3.92f,
-        0.12f,
-        m_shopTowerMaterials[typeIndex][tier - 1]);
-    RenderBitmapText(commandList,
-        wstring(static_cast<size_t>(tier), static_cast<wchar_t>(0x2605)),
-        XMFLOAT2{ 0.762f, 0.058f },
-        0.026f,
-        3.78f,
-        m_goldDigitMaterial);
+    if (m_towerModelMesh)
+    {
+        RenderTowerModelIcon(commandList,
+            m_towerInfoWidgets[WidgetIndex(TowerInfoWidget::TowerIcon)],
+            tower->type,
+            tier,
+            XMFLOAT2{ 0.724f, 0.073f },
+            iconScale * 1.70f,
+            3.86f);
+    }
+    else
+    {
+        renderWidget(TowerInfoWidget::TowerIcon,
+            XMFLOAT2{ 0.728f, 0.075f },
+            XMFLOAT2{ iconScale, iconScale * 1.18f },
+            3.92f,
+            0.12f,
+            m_shopTowerMaterials[typeIndex][tier - 1]);
+    }
+
+    size_t tierMarkerWidgetIndex = 132;
+    RenderTierMarkers(commandList,
+        XMFLOAT2{ 0.765f, 0.058f },
+        tier,
+        0.0058f,
+        0.017f,
+        3.68f,
+        tierMarkerWidgetIndex);
     RenderBitmapText(commandList,
         TowerTypeShortName(tower->type),
         XMFLOAT2{ 0.745f, 0.074f },
@@ -1915,15 +2275,12 @@ void TowerDefenseScene::RenderBitmapText(const ComPtr<ID3D12GraphicsCommandList>
     const float fullWidth = cache.width * unitX;
     const float startX = anchor.x - fullWidth * clamp(alignX, 0.0f, 1.0f);
     const float startY = anchor.y;
+    const bool drawShadow = m_infoBarBackgroundMaterial != nullptr && material != m_infoBarBackgroundMaterial;
 
     for (const auto& run : cache.runs)
     {
         if (m_bitmapTextCursor >= m_bitmapTextRects.size()) return;
 
-        auto& rect = m_bitmapTextRects[m_bitmapTextCursor++];
-        if (!rect) continue;
-
-        if (material) rect->SetMaterial(material);
         const XMFLOAT2 center{
             startX + run.center.x * unitX,
             startY + run.center.y * unitY
@@ -1933,6 +2290,27 @@ void TowerDefenseScene::RenderBitmapText(const ComPtr<ID3D12GraphicsCommandList>
             max(unitY, run.size.y * unitY)
         };
 
+        if (drawShadow)
+        {
+            auto& shadow = m_bitmapTextRects[m_bitmapTextCursor++];
+            if (shadow)
+            {
+                shadow->SetMaterial(m_infoBarBackgroundMaterial);
+                const XMFLOAT2 shadowCenter{
+                    center.x + unitX * 1.5f,
+                    center.y + unitY * 1.6f
+                };
+                XMFLOAT4X4 shadowWorld = BuildCameraAnchoredUiMatrix(shadowCenter, size, depth + 0.018f, 0.010f);
+                shadow->SetWorldMatrix(shadowWorld);
+                shadow->Render(commandList);
+            }
+            if (m_bitmapTextCursor >= m_bitmapTextRects.size()) return;
+        }
+
+        auto& rect = m_bitmapTextRects[m_bitmapTextCursor++];
+        if (!rect) continue;
+
+        if (material) rect->SetMaterial(material);
         XMFLOAT4X4 world = BuildCameraAnchoredUiMatrix(center, size, depth, 0.010f);
         rect->SetWorldMatrix(world);
         rect->Render(commandList);
@@ -1943,26 +2321,118 @@ void TowerDefenseScene::RenderStartScreenUI(const ComPtr<ID3D12GraphicsCommandLi
 {
     if (m_mode != TowerDefenseMode::StartScreen) return;
 
+    size_t widgetIndex = 0;
+    auto renderWidget = [this, &commandList, &widgetIndex](
+        const XMFLOAT2& center,
+        const XMFLOAT2& size,
+        float depth,
+        float thickness,
+        const shared_ptr<Material>& material)
+        {
+            if (widgetIndex >= m_hudWidgets.size() || !m_hudWidgets[widgetIndex]) return;
+            auto& widget = m_hudWidgets[widgetIndex++];
+            widget->SetMesh(m_cube);
+            if (material) widget->SetMaterial(material);
+            widget->SetWorldMatrix(BuildCameraAnchoredUiMatrix(center, size, depth, thickness));
+            widget->Render(commandList);
+        };
+
+    renderWidget(XMFLOAT2{ 0.5f, 0.530f }, XMFLOAT2{ 0.570f, 0.455f }, 4.16f, 0.032f, m_shopPanelMaterial);
+    renderWidget(XMFLOAT2{ 0.5f, 0.805f }, XMFLOAT2{ 0.220f, 0.070f }, 3.96f, 0.040f, m_startMaterial);
+
     RenderBitmapText(commandList,
-        L"START",
-        XMFLOAT2{ 0.5f, 0.452f },
-        0.065f,
+        L"TOP DEFENSE",
+        XMFLOAT2{ 0.5f, 0.315f },
+        0.056f,
         3.70f,
         m_bitmapTextMaterial,
         0.5f);
+
     RenderBitmapText(commandList,
-        L"DRAG TOWER  R ROLL  V VIEW",
-        XMFLOAT2{ 0.5f, 0.548f },
-        0.026f,
+        L"STAGE",
+        XMFLOAT2{ 0.5f, 0.394f },
+        0.030f,
         3.70f,
         m_goldDigitMaterial,
         0.5f);
+
+    const float stageCenters[StagePresetCount]{ 0.345f, 0.500f, 0.655f };
+    for (int stage = 0; stage < StagePresetCount; ++stage)
+    {
+        const bool selected = stage == clamp(m_selectedStage, 0, StagePresetCount - 1);
+        renderWidget(
+            XMFLOAT2{ stageCenters[stage], 0.448f },
+            XMFLOAT2{ 0.132f, 0.062f },
+            selected ? 3.90f : 4.01f,
+            0.032f,
+            selected ? m_startMaterial : m_shopSlotMaterial);
+        RenderBitmapText(commandList,
+            StagePresetName(stage),
+            XMFLOAT2{ stageCenters[stage], 0.435f },
+            0.022f,
+            3.66f,
+            selected ? m_bitmapTextMaterial : m_goldDigitMaterial,
+            0.5f);
+    }
+
     RenderBitmapText(commandList,
-        L"CLICK SAME STAR TO MERGE",
-        XMFLOAT2{ 0.5f, 0.592f },
-        0.024f,
+        L"DIFFICULTY",
+        XMFLOAT2{ 0.5f, 0.526f },
+        0.030f,
+        3.70f,
+        m_goldDigitMaterial,
+        0.5f);
+
+    const float difficultyCenters[DifficultyPresetCount]{ 0.345f, 0.500f, 0.655f };
+    for (int difficulty = 0; difficulty < DifficultyPresetCount; ++difficulty)
+    {
+        const bool selected = difficulty == clamp(m_selectedDifficulty, 0, DifficultyPresetCount - 1);
+        const shared_ptr<Material>& material = selected
+            ? (difficulty == 2 ? m_bossHealthFillMaterial : difficulty == 0 ? m_infoRangeMaterial : m_startMaterial)
+            : m_shopSlotMaterial;
+        renderWidget(
+            XMFLOAT2{ difficultyCenters[difficulty], 0.580f },
+            XMFLOAT2{ 0.132f, 0.062f },
+            selected ? 3.90f : 4.01f,
+            0.032f,
+            material);
+        RenderBitmapText(commandList,
+            DifficultyPresetName(difficulty),
+            XMFLOAT2{ difficultyCenters[difficulty], 0.567f },
+            0.021f,
+            3.66f,
+            m_bitmapTextMaterial,
+            0.5f);
+    }
+
+    WCHAR ruleText[96]{};
+    swprintf_s(ruleText,
+        L"HP %.0f%%  SPD %.0f%%  REWARD %.0f%%",
+        GetDifficultyHealthMultiplier() * 100.0f,
+        GetDifficultySpeedMultiplier() * 100.0f,
+        GetDifficultyRewardMultiplier() * 100.0f);
+    RenderBitmapText(commandList,
+        ruleText,
+        XMFLOAT2{ 0.5f, 0.650f },
+        0.022f,
         3.70f,
         m_bitmapTextMaterial,
+        0.5f);
+
+    RenderBitmapText(commandList,
+        L"START",
+        XMFLOAT2{ 0.5f, 0.790f },
+        0.040f,
+        3.64f,
+        m_bitmapTextMaterial,
+        0.5f);
+
+    RenderBitmapText(commandList,
+        L"DRAG TOWER  R ROLL  V VIEW  F SPEED",
+        XMFLOAT2{ 0.5f, 0.868f },
+        0.024f,
+        3.70f,
+        m_goldDigitMaterial,
         0.5f);
 }
 
@@ -2012,7 +2482,7 @@ void TowerDefenseScene::RenderGoldUI(const ComPtr<ID3D12GraphicsCommandList>& co
     RenderBitmapText(commandList, goldText, XMFLOAT2{ 0.972f, 0.014f }, 0.045f, 3.78f, m_goldDigitMaterial, 1.0f);
 
     WCHAR lifeText[32]{};
-    swprintf_s(lifeText, L"%d/%d", max(0, m_lives), 25);
+    swprintf_s(lifeText, L"%d/%d", max(0, m_lives), max(1, m_maxLives));
     RenderBitmapText(commandList, lifeText, XMFLOAT2{ 0.052f, 0.014f }, 0.045f, 3.78f, m_lifeUiMaterial);
 }
 
@@ -2101,11 +2571,22 @@ void TowerDefenseScene::RenderWavePreviewUI(const ComPtr<ID3D12GraphicsCommandLi
         3.70f,
         m_bitmapTextMaterial,
         0.5f);
+
+    WCHAR speedText[16]{};
+    swprintf_s(speedText, L"F x%.0f", GetGameSpeedMultiplier());
+    RenderBitmapText(commandList,
+        speedText,
+        XMFLOAT2{ 0.590f, 0.071f },
+        0.020f,
+        3.70f,
+        m_goldDigitMaterial,
+        0.5f);
 }
 
 void TowerDefenseScene::RenderTowerUpgradeUI(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
 {
     if (m_mode != TowerDefenseMode::Playing || !m_camera || m_hudWidgets.empty()) return;
+    if (m_bossRewardPending || m_waveRewardPending) return;
 
     size_t widgetIndex = 0;
     auto renderWidget = [this, &commandList, &widgetIndex](
@@ -2117,6 +2598,7 @@ void TowerDefenseScene::RenderTowerUpgradeUI(const ComPtr<ID3D12GraphicsCommandL
         {
             if (widgetIndex >= m_hudWidgets.size() || !m_hudWidgets[widgetIndex]) return;
             auto& widget = m_hudWidgets[widgetIndex++];
+            widget->SetMesh(m_cube);
             if (material) widget->SetMaterial(material);
 
             XMFLOAT4X4 world = BuildCameraAnchoredUiMatrix(center, size, depth, thickness);
@@ -2124,69 +2606,88 @@ void TowerDefenseScene::RenderTowerUpgradeUI(const ComPtr<ID3D12GraphicsCommandL
             widget->Render(commandList);
         };
 
-    renderWidget(XMFLOAT2{ 0.132f, 0.805f }, XMFLOAT2{ 0.245f, 0.300f }, 4.14f, 0.024f, m_shopPanelMaterial);
+    renderWidget(XMFLOAT2{ 0.132f, 0.835f }, XMFLOAT2{ 0.245f, 0.285f }, 4.14f, 0.024f, m_shopPanelMaterial);
     RenderBitmapText(commandList,
         L"DAMAGE UP",
-        XMFLOAT2{ 0.132f, 0.672f },
-        0.025f,
+        XMFLOAT2{ 0.132f, 0.710f },
+        0.027f,
         3.72f,
         m_bitmapTextMaterial,
         0.5f);
 
-    constexpr float RowStartY = 0.715f;
-    constexpr float RowStep = 0.035f;
     for (int type = 0; type < TowerTypeCount; ++type)
     {
         const int level = clamp(m_towerDamageLevels[type], 0, MaxTowerDamageUpgradeLevel);
         const int cost = GetTowerDamageUpgradeCost(type);
         const bool maxed = level >= MaxTowerDamageUpgradeLevel;
         const bool affordable = !maxed && m_gold >= cost;
-        const float y = RowStartY + static_cast<float>(type) * RowStep;
+        const int column = type % 3;
+        const int row = type / 3;
+        const float x = 0.059f + static_cast<float>(column) * 0.073f;
+        const float y = 0.785f + static_cast<float>(row) * 0.108f;
         const TowerDefenseTowerType towerType = TowerTypeFromIndex(type);
 
         renderWidget(
-            XMFLOAT2{ 0.132f, y },
-            XMFLOAT2{ 0.212f, 0.028f },
+            XMFLOAT2{ x, y },
+            XMFLOAT2{ 0.060f, 0.060f },
             4.02f,
-            0.018f,
+            0.022f,
             affordable ? m_shopTowerMaterials[type][0] : m_infoBarBackgroundMaterial);
 
-        renderWidget(
-            XMFLOAT2{ 0.045f, y },
-            XMFLOAT2{ 0.014f, 0.014f },
-            3.90f,
-            0.026f,
-            m_shopTowerMaterials[type][0]);
-
-        RenderBitmapText(commandList,
-            TowerTypeShortName(towerType),
-            XMFLOAT2{ 0.061f, y - 0.010f },
-            0.018f,
-            3.70f,
-            m_bitmapTextMaterial);
-
-        WCHAR infoText[48]{};
-        if (maxed)
+        if (m_towerModelMesh && widgetIndex < m_hudWidgets.size() && m_hudWidgets[widgetIndex])
         {
-            swprintf_s(infoText, L"LV%d MAX", level);
+            RenderTowerModelIcon(commandList,
+                m_hudWidgets[widgetIndex++],
+                towerType,
+                1,
+                XMFLOAT2{ x, y - 0.012f },
+                0.047f,
+                3.84f);
         }
         else
         {
-            swprintf_s(infoText, L"LV%d  %dC", level, cost);
+            renderWidget(
+                XMFLOAT2{ x, y - 0.010f },
+                XMFLOAT2{ 0.022f, 0.022f },
+                3.90f,
+                0.026f,
+                m_shopTowerMaterials[type][0]);
         }
+
         RenderBitmapText(commandList,
-            infoText,
-            XMFLOAT2{ 0.232f, y - 0.010f },
-            0.018f,
+            TowerTypeShortName(towerType),
+            XMFLOAT2{ x, y - 0.039f },
+            0.014f,
+            3.70f,
+            m_bitmapTextMaterial,
+            0.5f);
+
+        WCHAR levelText[16]{};
+        swprintf_s(levelText, L"LV%d", level);
+        RenderBitmapText(commandList,
+            levelText,
+            XMFLOAT2{ x, y + 0.017f },
+            0.017f,
+            3.70f,
+            affordable || maxed ? m_goldDigitMaterial : m_lifeUiMaterial,
+            0.5f);
+
+        WCHAR costText[16]{};
+        swprintf_s(costText, maxed ? L"MAX" : L"%dC", cost);
+        RenderBitmapText(commandList,
+            costText,
+            XMFLOAT2{ x, y + 0.041f },
+            0.014f,
             3.70f,
             affordable ? m_goldDigitMaterial : m_lifeUiMaterial,
-            1.0f);
+            0.5f);
     }
 }
 
 void TowerDefenseScene::RenderMiniMapUI(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
 {
     if (m_mode != TowerDefenseMode::Playing || !m_camera || !m_terrainHeightMap || m_hudWidgets.empty()) return;
+    if (m_bossRewardPending || m_waveRewardPending) return;
 
     size_t widgetIndex = 42;
     auto renderWidget = [this, &commandList, &widgetIndex](
@@ -2198,6 +2699,7 @@ void TowerDefenseScene::RenderMiniMapUI(const ComPtr<ID3D12GraphicsCommandList>&
         {
             if (widgetIndex >= m_hudWidgets.size() || !m_hudWidgets[widgetIndex]) return;
             auto& widget = m_hudWidgets[widgetIndex++];
+            widget->SetMesh(m_cube);
             if (material) widget->SetMaterial(material);
 
             XMFLOAT4X4 world = BuildCameraAnchoredUiMatrix(center, size, depth, thickness);
@@ -2205,17 +2707,17 @@ void TowerDefenseScene::RenderMiniMapUI(const ComPtr<ID3D12GraphicsCommandList>&
             widget->Render(commandList);
         };
 
-    const XMFLOAT2 panelCenter{ 0.884f, 0.805f };
-    const XMFLOAT2 panelSize{ 0.205f, 0.265f };
-    const XMFLOAT2 mapCenter{ 0.884f, 0.825f };
-    const XMFLOAT2 mapSize{ 0.168f, 0.190f };
+    const XMFLOAT2 panelCenter{ 0.890f, 0.887f };
+    const XMFLOAT2 panelSize{ 0.205f, 0.220f };
+    const XMFLOAT2 mapCenter{ 0.890f, 0.902f };
+    const XMFLOAT2 mapSize{ 0.170f, 0.158f };
     renderWidget(panelCenter, panelSize, 4.14f, 0.024f, m_shopPanelMaterial);
     renderWidget(mapCenter, mapSize, 4.02f, 0.018f, m_infoBarBackgroundMaterial);
 
     RenderBitmapText(commandList,
         L"MINI MAP",
-        XMFLOAT2{ panelCenter.x, 0.690f },
-        0.025f,
+        XMFLOAT2{ panelCenter.x, 0.790f },
+        0.023f,
         3.72f,
         m_bitmapTextMaterial,
         0.5f);
@@ -2228,7 +2730,7 @@ void TowerDefenseScene::RenderMiniMapUI(const ComPtr<ID3D12GraphicsCommandList>&
             const float nz = clamp(position.z / terrainLength + 0.5f, 0.0f, 1.0f);
             return XMFLOAT2{
                 mapCenter.x - mapSize.x * 0.5f + nx * mapSize.x,
-                mapCenter.y - mapSize.y * 0.5f + nz * mapSize.y
+                mapCenter.y + mapSize.y * 0.5f - nz * mapSize.y
             };
         };
 
@@ -2357,8 +2859,8 @@ void TowerDefenseScene::RenderBossRewardUI(const ComPtr<ID3D12GraphicsCommandLis
 
     m_shopPanel->SetMaterial(m_shopPanelMaterial);
     XMFLOAT4X4 panelWorld = BuildCameraAnchoredUiMatrix(
-        XMFLOAT2{ 0.5f, 0.420f },
-        XMFLOAT2{ 0.52f, 0.235f },
+        XMFLOAT2{ 0.5f, 0.442f },
+        XMFLOAT2{ 0.660f, 0.320f },
         4.01f,
         0.055f);
     m_shopPanel->SetWorldMatrix(panelWorld);
@@ -2366,19 +2868,21 @@ void TowerDefenseScene::RenderBossRewardUI(const ComPtr<ID3D12GraphicsCommandLis
 
     RenderBitmapText(commandList,
         L"BOSS REWARD",
-        XMFLOAT2{ 0.5f, 0.330f },
-        0.048f,
+        XMFLOAT2{ 0.5f, 0.304f },
+        0.054f,
         3.66f,
         m_bitmapTextMaterial,
         0.5f);
 
     const XMFLOAT2 choiceCenters[3]{
-        XMFLOAT2{ 0.365f, 0.440f },
-        XMFLOAT2{ 0.500f, 0.440f },
-        XMFLOAT2{ 0.635f, 0.440f }
+        XMFLOAT2{ 0.330f, 0.462f },
+        XMFLOAT2{ 0.500f, 0.462f },
+        XMFLOAT2{ 0.670f, 0.462f }
     };
+    WCHAR goldDetail[24]{};
+    swprintf_s(goldDetail, L"+%dC", ScaleReward(14 + max(1, m_bossRewardWave) * 3));
     const wchar_t* labels[3]{ L"GOLD", L"LIFE", L"SHOP" };
-    const wchar_t* detail[3]{ L"+BONUS", L"+5", L"UP" };
+    const wchar_t* detail[3]{ goldDetail, L"+5", L"UP" };
     const shared_ptr<Material> materials[3]{
         m_goldUiMaterial,
         m_lifeUiMaterial,
@@ -2389,10 +2893,11 @@ void TowerDefenseScene::RenderBossRewardUI(const ComPtr<ID3D12GraphicsCommandLis
     {
         if (!m_shopSlots[i]) continue;
 
+        m_shopSlots[i]->SetMesh(m_cube);
         m_shopSlots[i]->SetMaterial(materials[i] ? materials[i] : m_shopSlotMaterial);
         XMFLOAT4X4 choiceWorld = BuildCameraAnchoredUiMatrix(
             choiceCenters[i],
-            XMFLOAT2{ 0.105f, 0.096f },
+            XMFLOAT2{ 0.148f, 0.126f },
             3.88f,
             0.050f);
         m_shopSlots[i]->SetWorldMatrix(choiceWorld);
@@ -2400,15 +2905,15 @@ void TowerDefenseScene::RenderBossRewardUI(const ComPtr<ID3D12GraphicsCommandLis
 
         RenderBitmapText(commandList,
             labels[i],
-            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y - 0.025f },
-            0.030f,
+            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y - 0.036f },
+            0.034f,
             3.62f,
             m_bitmapTextMaterial,
             0.5f);
         RenderBitmapText(commandList,
             detail[i],
-            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y + 0.027f },
-            0.024f,
+            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y + 0.033f },
+            0.027f,
             3.62f,
             m_goldDigitMaterial,
             0.5f);
@@ -2422,8 +2927,8 @@ void TowerDefenseScene::RenderWaveRewardUI(const ComPtr<ID3D12GraphicsCommandLis
 
     m_shopPanel->SetMaterial(m_shopPanelMaterial);
     XMFLOAT4X4 panelWorld = BuildCameraAnchoredUiMatrix(
-        XMFLOAT2{ 0.5f, 0.420f },
-        XMFLOAT2{ 0.52f, 0.235f },
+        XMFLOAT2{ 0.5f, 0.442f },
+        XMFLOAT2{ 0.660f, 0.320f },
         4.00f,
         0.055f);
     m_shopPanel->SetWorldMatrix(panelWorld);
@@ -2433,20 +2938,20 @@ void TowerDefenseScene::RenderWaveRewardUI(const ComPtr<ID3D12GraphicsCommandLis
     swprintf_s(title, L"WAVE %d CLEAR", max(1, m_waveRewardWave));
     RenderBitmapText(commandList,
         title,
-        XMFLOAT2{ 0.5f, 0.330f },
-        0.046f,
+        XMFLOAT2{ 0.5f, 0.304f },
+        0.052f,
         3.66f,
         m_bitmapTextMaterial,
         0.5f);
 
-    const int goldBonus = 6 + max(1, m_waveRewardWave) * 2;
+    const int goldBonus = ScaleReward(6 + max(1, m_waveRewardWave) * 2);
     WCHAR goldDetail[24]{};
     swprintf_s(goldDetail, L"+%dC", goldBonus);
 
     const XMFLOAT2 choiceCenters[3]{
-        XMFLOAT2{ 0.365f, 0.440f },
-        XMFLOAT2{ 0.500f, 0.440f },
-        XMFLOAT2{ 0.635f, 0.440f }
+        XMFLOAT2{ 0.330f, 0.462f },
+        XMFLOAT2{ 0.500f, 0.462f },
+        XMFLOAT2{ 0.670f, 0.462f }
     };
     const wchar_t* labels[3]{ L"GOLD", L"LIFE", L"SHOP" };
     const wchar_t* detail[3]{ goldDetail, L"+2", L"FREE" };
@@ -2460,10 +2965,11 @@ void TowerDefenseScene::RenderWaveRewardUI(const ComPtr<ID3D12GraphicsCommandLis
     {
         if (!m_shopSlots[i]) continue;
 
+        m_shopSlots[i]->SetMesh(m_cube);
         m_shopSlots[i]->SetMaterial(materials[i] ? materials[i] : m_shopSlotMaterial);
         XMFLOAT4X4 choiceWorld = BuildCameraAnchoredUiMatrix(
             choiceCenters[i],
-            XMFLOAT2{ 0.105f, 0.096f },
+            XMFLOAT2{ 0.148f, 0.126f },
             3.87f,
             0.050f);
         m_shopSlots[i]->SetWorldMatrix(choiceWorld);
@@ -2471,17 +2977,47 @@ void TowerDefenseScene::RenderWaveRewardUI(const ComPtr<ID3D12GraphicsCommandLis
 
         RenderBitmapText(commandList,
             labels[i],
-            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y - 0.025f },
-            0.030f,
+            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y - 0.036f },
+            0.034f,
             3.62f,
             m_bitmapTextMaterial,
             0.5f);
         RenderBitmapText(commandList,
             detail[i],
-            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y + 0.027f },
-            0.024f,
+            XMFLOAT2{ choiceCenters[i].x, choiceCenters[i].y + 0.033f },
+            0.027f,
             3.62f,
             m_goldDigitMaterial,
+            0.5f);
+    }
+}
+
+void TowerDefenseScene::RenderDamagePopups(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
+{
+    if (!m_camera || !g_framework) return;
+
+    for (const auto& popup : m_damagePopups)
+    {
+        if (popup.text.empty() || popup.maxLifetime <= 0.0f) continue;
+
+        XMFLOAT2 screen{};
+        float depth = 0.0f;
+        if (!WorldToScreenUi(popup.position, screen, depth)) continue;
+
+        const float t = clamp(popup.lifetime / popup.maxLifetime, 0.0f, 1.0f);
+        const int typeIndex = TowerTypeIndex(popup.type);
+        const shared_ptr<Material>& material =
+            popup.type == TowerDefenseTowerType::Slow ? m_infoRangeMaterial :
+            popup.type == TowerDefenseTowerType::Mortar ? m_meteorUiMaterial :
+            popup.type == TowerDefenseTowerType::Flak ? m_freezeUiMaterial :
+            m_hitMaterials[typeIndex] ? m_hitMaterials[typeIndex] : m_goldDigitMaterial;
+
+        RenderBitmapText(commandList,
+            popup.text,
+            screen,
+            popup.size * (0.82f + t * 0.28f),
+            max(3.55f, 3.86f - depth * 0.012f),
+            material,
             0.5f);
     }
 }
@@ -2512,6 +3048,7 @@ void TowerDefenseScene::RenderResultUI(const ComPtr<ID3D12GraphicsCommandList>& 
         const float y = m_mode == TowerDefenseMode::Victory
             ? 0.405f + (i % 2) * 0.065f
             : 0.450f;
+        m_shopSlots[i]->SetMesh(m_cube);
         m_shopSlots[i]->SetMaterial(resultMaterial);
         XMFLOAT4X4 accentWorld = BuildCameraAnchoredUiMatrix(
             XMFLOAT2{ x, y },
@@ -2551,14 +3088,22 @@ void TowerDefenseScene::RenderResultUI(const ComPtr<ID3D12GraphicsCommandList>& 
         0.5f);
 
     WCHAR lineC[72]{};
-    swprintf_s(lineC, L"PLACE %d   MERGE %d   BEST %dSTAR", m_towersPlaced, m_towersMerged, m_highestTowerTier);
+    swprintf_s(lineC, L"PLACE %d   MERGE %d   BEST", m_towersPlaced, m_towersMerged);
     RenderBitmapText(commandList,
         lineC,
-        XMFLOAT2{ 0.5f, 0.508f },
+        XMFLOAT2{ 0.472f, 0.508f },
         0.028f,
         3.70f,
         m_bitmapTextMaterial,
         0.5f);
+    size_t tierMarkerWidgetIndex = 154;
+    RenderTierMarkers(commandList,
+        XMFLOAT2{ 0.626f, 0.508f },
+        m_highestTowerTier,
+        0.0065f,
+        0.019f,
+        3.68f,
+        tierMarkerWidgetIndex);
 
     RenderBitmapText(commandList,
         L"ESC MENU",
@@ -2751,16 +3296,21 @@ void TowerDefenseScene::Update(FLOAT timeElapsed)
     if (m_mode != TowerDefenseMode::Playing)
     {
         UpdateHitMarkers(timeElapsed);
+        UpdateDamagePopups(timeElapsed);
+        UpdateRollingBoulders(timeElapsed);
         UpdateScopeMarkers(timeElapsed);
         return;
     }
 
-    UpdateEnemies(timeElapsed);
-    UpdateTowers(timeElapsed);
-    UpdateGenerators(timeElapsed);
-    UpdateProjectiles(timeElapsed);
-    UpdateHitMarkers(timeElapsed);
-    UpdateScopeMarkers(timeElapsed);
+    const float gameplayTimeElapsed = timeElapsed * GetGameSpeedMultiplier();
+    UpdateEnemies(gameplayTimeElapsed);
+    UpdateTowers(gameplayTimeElapsed);
+    UpdateGenerators(gameplayTimeElapsed);
+    UpdateProjectiles(gameplayTimeElapsed);
+    UpdateHitMarkers(gameplayTimeElapsed);
+    UpdateDamagePopups(gameplayTimeElapsed);
+    UpdateRollingBoulders(gameplayTimeElapsed);
+    UpdateScopeMarkers(gameplayTimeElapsed);
 
     if (m_lives <= 0)
     {
@@ -2779,7 +3329,7 @@ void TowerDefenseScene::Update(FLOAT timeElapsed)
     {
         if (m_waveRunning)
         {
-            m_spawnTimer -= timeElapsed;
+            m_spawnTimer -= gameplayTimeElapsed;
             if (m_spawnTimer <= 0.0f)
             {
                 const int remaining = waveSize - m_spawnedInWave;
@@ -2848,7 +3398,7 @@ void TowerDefenseScene::Update(FLOAT timeElapsed)
         if (m_wave >= MaxWave)
         {
             m_mode = TowerDefenseMode::Victory;
-            AddGold(10);
+            AddGold(ScaleReward(10));
             ClearDragGhost();
             return;
         }
@@ -2930,9 +3480,9 @@ void TowerDefenseScene::UpdateEnemies(float timeElapsed)
             if (escaped) m_lives = max(0, m_lives - 1);
             if (defeated)
             {
-                const int coinReward = it->isBoss
+                const int coinReward = ScaleReward(it->isBoss
                     ? 10 + m_wave * 2
-                    : 1 + (it->maxHealth > 90.0f ? 1 : 0);
+                    : 1 + (it->maxHealth > 90.0f ? 1 : 0));
                 AddGold(coinReward);
                 ++m_totalEnemiesDefeated;
                 if (it->isBoss)
@@ -3037,7 +3587,7 @@ void TowerDefenseScene::UpdateGenerators(float timeElapsed)
         generator.timer -= timeElapsed;
         if (generator.timer > 0.0f) continue;
 
-        AddGold(generator.amount);
+        AddGold(ScaleReward(generator.amount));
         XMFLOAT3 position = generator.object->GetPosition();
         SpawnCoinDropEffect(position, generator.amount);
         generator.timer = generator.interval;
@@ -3076,8 +3626,10 @@ void TowerDefenseScene::UpdateProjectiles(float timeElapsed)
                     const float hitScale = max(0.90f, enemy->visualScale);
                     const float damageMultiplier =
                         (it->type == TowerDefenseTowerType::Flak && enemy->isFlying) ? 1.85f : 1.0f;
-                    enemy->health -= it->damage * damageMultiplier;
+                    const float damage = it->damage * damageMultiplier;
+                    enemy->health -= damage;
                     SpawnHitMarker(hitPosition, it->type, hitScale);
+                    SpawnDamagePopup(hitPosition, damage, it->type, hitScale);
 
                     if (it->slowDuration > 0.0f)
                     {
@@ -3098,6 +3650,7 @@ void TowerDefenseScene::UpdateProjectiles(float timeElapsed)
                             if (it->type == TowerDefenseTowerType::Flak && splashEnemy.isFlying) splashDamage *= 1.45f;
                             splashEnemy.health -= splashDamage;
                             SpawnHitMarker(splashEnemy.object->GetPosition(), it->type, 0.80f);
+                            SpawnDamagePopup(splashEnemy.object->GetPosition(), splashDamage, it->type, 0.80f);
                         }
                     }
                 }
@@ -3134,6 +3687,108 @@ void TowerDefenseScene::UpdateHitMarkers(float timeElapsed)
         {
             RemoveRenderObject(it->object);
             it = m_hitMarkers.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
+void TowerDefenseScene::UpdateDamagePopups(float timeElapsed)
+{
+    for (auto& popup : m_damagePopups)
+    {
+        popup.lifetime -= timeElapsed;
+        popup.position = Utiles::Vector3::Add(popup.position, Utiles::Vector3::Mul(popup.velocity, timeElapsed));
+        popup.velocity.y += 0.35f * timeElapsed;
+    }
+
+    erase_if(m_damagePopups, [](const TowerDefenseDamagePopup& popup)
+        {
+            return popup.lifetime <= 0.0f;
+        });
+}
+
+void TowerDefenseScene::UpdateRollingBoulders(float timeElapsed)
+{
+    for (auto& boulder : m_rollingBoulders)
+    {
+        boulder.lifetime -= timeElapsed;
+        if (!boulder.object || boulder.routeIndex >= m_enemyPaths.size()) continue;
+
+        const auto& path = m_enemyPaths[boulder.routeIndex];
+        if (path.empty() || boulder.waypointIndex >= path.size()) continue;
+
+        XMFLOAT3 target = path[boulder.waypointIndex];
+        target.y = TerrainHeightAtWorldXZ(target.x, target.z) + boulder.radius;
+        XMFLOAT3 delta = Utiles::Vector3::Sub(target, boulder.position);
+        delta.y = 0.0f;
+        const float distanceSq = Utiles::Vector3::Dot(delta, delta);
+        const float maxMove = boulder.speed * timeElapsed;
+        if (distanceSq <= maxMove * maxMove)
+        {
+            boulder.position = target;
+            ++boulder.waypointIndex;
+        }
+        else if (distanceSq > Utiles::Physics::Epsilon)
+        {
+            const XMFLOAT3 direction = Normalize(delta);
+            boulder.direction = direction;
+            boulder.position = Utiles::Vector3::Add(boulder.position, Utiles::Vector3::Mul(direction, maxMove));
+            boulder.position.y = TerrainHeightAtWorldXZ(boulder.position.x, boulder.position.z) + boulder.radius;
+            boulder.rollAngle += maxMove / max(0.1f, boulder.radius);
+        }
+
+        for (auto& enemy : m_enemies)
+        {
+            if (!enemy.object || enemy.health <= 0.0f || enemy.isFlying) continue;
+            const bool alreadyHit = any_of(boulder.hitEnemies.begin(), boulder.hitEnemies.end(),
+                [&enemy](const weak_ptr<GameObject>& hit)
+                {
+                    return hit.lock() == enemy.object;
+                });
+            if (alreadyHit) continue;
+
+            const float hitRadius = boulder.radius + max(0.42f, enemy.visualScale * 0.42f);
+            if (DistanceSqXZ(boulder.position, enemy.object->GetPosition()) > hitRadius * hitRadius) continue;
+
+            enemy.health -= boulder.damage;
+            boulder.hitEnemies.push_back(enemy.object);
+            const XMFLOAT3 hitPosition = enemy.object->GetPosition();
+            SpawnHitMarker(hitPosition, TowerDefenseTowerType::Splash, max(1.0f, enemy.visualScale));
+            SpawnDamagePopup(hitPosition, boulder.damage, TowerDefenseTowerType::Splash, max(1.0f, enemy.visualScale));
+            for (int i = 0; i < 8; ++i)
+            {
+                const float angle = XM_2PI * static_cast<float>(i) / 8.0f;
+                SpawnParticle(
+                    XMFLOAT3{ hitPosition.x, hitPosition.y + 0.18f, hitPosition.z },
+                    XMFLOAT3{ cosf(angle) * 1.35f, Utiles::Random::GetFloat(0.22f, 0.72f), sinf(angle) * 1.35f },
+                    XMFLOAT3{ 0.10f, 0.055f, 0.10f },
+                    m_boulderMaterial ? m_boulderMaterial : m_hitMaterial,
+                    0.34f,
+                    1.25f);
+            }
+        }
+
+        const XMVECTOR rollAxis = XMVector3Normalize(XMVectorSet(boulder.direction.z, 0.0f, -boulder.direction.x, 0.0f));
+        XMFLOAT4X4 world{};
+        XMStoreFloat4x4(&world,
+            XMMatrixRotationAxis(rollAxis, boulder.rollAngle) *
+            XMMatrixScaling(boulder.radius, boulder.radius, boulder.radius) *
+            XMMatrixTranslation(boulder.position.x, boulder.position.y, boulder.position.z));
+        boulder.object->SetWorldMatrix(world);
+    }
+
+    for (auto it = m_rollingBoulders.begin(); it != m_rollingBoulders.end();)
+    {
+        const bool finished = it->lifetime <= 0.0f ||
+            it->routeIndex >= m_enemyPaths.size() ||
+            it->waypointIndex >= m_enemyPaths[it->routeIndex].size();
+        if (finished)
+        {
+            RemoveRenderObject(it->object);
+            it = m_rollingBoulders.erase(it);
         }
         else
         {
@@ -3211,7 +3866,7 @@ void TowerDefenseScene::SpawnEnemy(float healthMultiplier,
     default:
         break;
     }
-    const float health = baseHealth * healthMultiplier;
+    const float health = baseHealth * healthMultiplier * GetDifficultyHealthMultiplier();
     XMFLOAT3 spawn = route.front();
     if (route.size() > 1 && fabsf(laneOffset) > 0.001f)
     {
@@ -3263,7 +3918,7 @@ void TowerDefenseScene::SpawnEnemy(float healthMultiplier,
         routeIndex,
         1,
         health,
-        baseSpeed * speedMultiplier,
+        baseSpeed * speedMultiplier * GetDifficultySpeedMultiplier(),
         visualScale,
         isBoss,
         isFlying,
@@ -3470,6 +4125,27 @@ void TowerDefenseScene::SpawnHitMarker(const XMFLOAT3& position,
     }
 
     scale = max(0.65f, scale);
+    const int ringCount = type == TowerDefenseTowerType::Mortar ? 12 :
+        type == TowerDefenseTowerType::Splash ? 10 : 8;
+    const float ringSpeed = (type == TowerDefenseTowerType::Mortar ? 2.55f :
+        type == TowerDefenseTowerType::Splash ? 2.10f : 1.45f) * scale;
+    const XMFLOAT3 ringScale{
+        (type == TowerDefenseTowerType::Mortar ? 0.22f : 0.16f) * scale,
+        0.018f,
+        0.035f * scale
+    };
+    for (int i = 0; i < ringCount; ++i)
+    {
+        const float angle = XM_2PI * static_cast<float>(i) / static_cast<float>(ringCount);
+        SpawnParticle(
+            XMFLOAT3{ position.x, position.y + 0.11f, position.z },
+            XMFLOAT3{ cosf(angle) * ringSpeed, 0.08f, sinf(angle) * ringSpeed },
+            ringScale,
+            material,
+            0.22f,
+            0.12f);
+    }
+
     for (int i = 0; i < particleCount; ++i)
     {
         const float angle = Utiles::Random::GetFloat(0.0f, XM_2PI);
@@ -3482,6 +4158,30 @@ void TowerDefenseScene::SpawnHitMarker(const XMFLOAT3& position,
             lifetime,
             gravity);
     }
+}
+
+void TowerDefenseScene::SpawnDamagePopup(const XMFLOAT3& position,
+    float damage,
+    TowerDefenseTowerType type,
+    float scale)
+{
+    if (damage <= 0.0f) return;
+
+    WCHAR text[24]{};
+    swprintf_s(text, L"%.0f", damage);
+    m_damagePopups.push_back(TowerDefenseDamagePopup{
+        XMFLOAT3{ position.x, position.y + 0.62f * max(0.85f, scale), position.z },
+        XMFLOAT3{
+            Utiles::Random::GetFloat(-0.16f, 0.16f),
+            1.05f + Utiles::Random::GetFloat(0.0f, 0.28f),
+            Utiles::Random::GetFloat(-0.16f, 0.16f)
+        },
+        text,
+        0.72f,
+        0.72f,
+        0.022f + min(0.012f, damage * 0.00055f) + max(0.0f, scale - 1.0f) * 0.004f,
+        type
+        });
 }
 
 void TowerDefenseScene::SpawnDeathEffect(const XMFLOAT3& position, float scale)
@@ -3557,8 +4257,10 @@ void TowerDefenseScene::SpawnMeteorStrike(const XMFLOAT3& position, int tier)
         const float distanceRatio = sqrtf(max(0.0f, distanceSq)) / max(radius, 0.001f);
         const float falloff = 1.0f - distanceRatio * 0.38f;
         const float airBonus = enemy.isFlying ? 0.78f : 1.0f;
-        enemy.health -= damage * max(0.35f, falloff) * airBonus;
+        const float appliedDamage = damage * max(0.35f, falloff) * airBonus;
+        enemy.health -= appliedDamage;
         SpawnHitMarker(enemyPosition, TowerDefenseTowerType::Splash, max(1.0f, enemy.visualScale));
+        SpawnDamagePopup(enemyPosition, appliedDamage, TowerDefenseTowerType::Splash, max(1.0f, enemy.visualScale));
     }
 
     for (int i = 0; i < 5 + tier * 2; ++i)
@@ -3592,10 +4294,6 @@ void TowerDefenseScene::SpawnMeteorStrike(const XMFLOAT3& position, int tier)
             0.55f + tier * 0.08f,
             2.25f);
     }
-
-    m_cameraShakeDuration = 0.52f + static_cast<float>(tier) * 0.08f;
-    m_cameraShakeTimer = m_cameraShakeDuration;
-    m_cameraShakeIntensity = 0.28f + static_cast<float>(tier) * 0.10f;
 }
 
 void TowerDefenseScene::SpawnFreezeField(const XMFLOAT3& position, int tier)
@@ -3647,6 +4345,93 @@ void TowerDefenseScene::SpawnBoostEffect(const XMFLOAT3& position, int tier)
             0.64f,
             1.10f);
     }
+}
+
+void TowerDefenseScene::SpawnRollingBoulder(const XMFLOAT3& position, int tier)
+{
+    if (m_enemyPaths.empty()) return;
+
+    tier = clamp(tier, 1, MaxTowerTier);
+    size_t bestRoute = 0;
+    size_t bestWaypoint = 1;
+    XMFLOAT3 bestPoint = position;
+    float bestDistanceSq = FLT_MAX;
+
+    for (size_t routeIndex = 0; routeIndex < m_enemyPaths.size(); ++routeIndex)
+    {
+        const auto& path = m_enemyPaths[routeIndex];
+        if (path.size() < 2) continue;
+
+        for (size_t i = 1; i < path.size(); ++i)
+        {
+            XMVECTOR a = XMVectorSet(path[i - 1].x, 0.0f, path[i - 1].z, 0.0f);
+            XMVECTOR b = XMVectorSet(path[i].x, 0.0f, path[i].z, 0.0f);
+            XMVECTOR p = XMVectorSet(position.x, 0.0f, position.z, 0.0f);
+            XMVECTOR ab = XMVectorSubtract(b, a);
+            const float abLengthSq = XMVectorGetX(XMVector3Dot(ab, ab));
+            if (abLengthSq <= Utiles::Physics::Epsilon) continue;
+
+            float u = XMVectorGetX(XMVector3Dot(XMVectorSubtract(p, a), ab)) / abLengthSq;
+            u = clamp(u, 0.0f, 1.0f);
+            XMVECTOR closest = XMVectorAdd(a, XMVectorScale(ab, u));
+            XMVECTOR delta = XMVectorSubtract(p, closest);
+            const float distanceSq = XMVectorGetX(XMVector3Dot(delta, delta));
+            if (distanceSq < bestDistanceSq)
+            {
+                XMFLOAT3 closestPoint{};
+                XMStoreFloat3(&closestPoint, closest);
+                bestDistanceSq = distanceSq;
+                bestRoute = routeIndex;
+                bestWaypoint = i;
+                bestPoint = XMFLOAT3{ closestPoint.x, TerrainHeightAtWorldXZ(closestPoint.x, closestPoint.z), closestPoint.z };
+            }
+        }
+    }
+
+    const float radius = BoulderRadius(tier);
+    bestPoint.y = TerrainHeightAtWorldXZ(bestPoint.x, bestPoint.z) + radius;
+
+    auto object = make_shared<GameObject>();
+    object->SetName("Rolling Boulder");
+    object->SetMesh(m_boulderMesh ? m_boulderMesh : m_cube);
+    object->SetMaterial(m_boulderMaterial ? m_boulderMaterial : m_tunnelStoneMaterial);
+    XMFLOAT4X4 world{};
+    XMStoreFloat4x4(&world, XMMatrixScaling(radius, radius, radius) *
+        XMMatrixTranslation(bestPoint.x, bestPoint.y, bestPoint.z));
+    object->SetWorldMatrix(world);
+    EnableShadowCasting(object);
+    m_objects.push_back(object);
+
+    TowerDefenseRollingBoulder boulder{};
+    boulder.object = object;
+    boulder.routeIndex = bestRoute;
+    boulder.waypointIndex = bestWaypoint;
+    boulder.position = bestPoint;
+    boulder.radius = radius;
+    boulder.speed = BoulderSpeed(tier);
+    boulder.damage = BoulderDamage(tier, m_wave);
+    boulder.lifetime = 7.5f + static_cast<float>(tier) * 1.4f;
+    boulder.tier = tier;
+
+    if (bestRoute < m_enemyPaths.size() && bestWaypoint < m_enemyPaths[bestRoute].size())
+    {
+        XMFLOAT3 target = m_enemyPaths[bestRoute][bestWaypoint];
+        boulder.direction = Normalize(XMFLOAT3{ target.x - bestPoint.x, 0.0f, target.z - bestPoint.z });
+    }
+
+    for (int i = 0; i < 12; ++i)
+    {
+        const float angle = XM_2PI * static_cast<float>(i) / 12.0f;
+        SpawnParticle(
+            XMFLOAT3{ bestPoint.x, bestPoint.y - radius * 0.55f, bestPoint.z },
+            XMFLOAT3{ cosf(angle) * 1.15f, Utiles::Random::GetFloat(0.12f, 0.42f), sinf(angle) * 1.15f },
+            XMFLOAT3{ 0.095f, 0.045f, 0.095f },
+            m_boulderMaterial ? m_boulderMaterial : m_tunnelStoneMaterial,
+            0.38f,
+            0.85f);
+    }
+
+    m_rollingBoulders.push_back(std::move(boulder));
 }
 
 void TowerDefenseScene::SpawnParticle(const XMFLOAT3& position,
@@ -3792,7 +4577,10 @@ void TowerDefenseScene::UpdateDragPreview(HWND hWnd)
             validCell = CanPlaceTower(point);
             break;
         case TowerDefenseOfferKind::Boost:
-            validCell = m_consumableCooldown <= 0.0f && FindTowerAtPoint(point) != nullptr;
+            validCell = m_consumableCooldown <= 0.0f && !m_towers.empty();
+            break;
+        case TowerDefenseOfferKind::Boulder:
+            validCell = m_consumableCooldown <= 0.0f && !m_enemyPaths.empty();
             break;
         default:
             validCell = m_consumableCooldown <= 0.0f;
@@ -3827,6 +4615,9 @@ void TowerDefenseScene::UpdateDragPreview(HWND hWnd)
         case TowerDefenseOfferKind::Boost:
             ghostColor = XMFLOAT4{ 0.35f, 1.0f, 0.18f, 0.50f };
             break;
+        case TowerDefenseOfferKind::Boulder:
+            ghostColor = XMFLOAT4{ 0.62f, 0.58f, 0.46f, 0.56f };
+            break;
         case TowerDefenseOfferKind::Generator:
             ghostColor = XMFLOAT4{ 1.0f, 0.78f, 0.16f, 0.48f };
             break;
@@ -3855,8 +4646,15 @@ void TowerDefenseScene::UpdateDragPreview(HWND hWnd)
         visualSize = XMFLOAT3{ FreezeRadius(m_dragOffer.tier), 0.035f, FreezeRadius(m_dragOffer.tier) };
         break;
     case TowerDefenseOfferKind::Boost:
-        visualSize = XMFLOAT3{ 0.92f, 0.050f, 0.92f };
+        visualSize = XMFLOAT3{ 2.40f, 0.050f, 2.40f };
         break;
+    case TowerDefenseOfferKind::Boulder:
+    {
+        const float radius = BoulderRadius(m_dragOffer.tier);
+        visualSize = XMFLOAT3{ radius, radius, radius };
+        position.y = TerrainHeightAtWorldXZ(point.x, point.z) + radius;
+        break;
+    }
     case TowerDefenseOfferKind::Generator:
     {
         const float tierScale = TowerVisualScale(m_dragOffer.tier);
@@ -3985,12 +4783,48 @@ bool TowerDefenseScene::TryCastFreeze(const XMFLOAT3& terrainPoint, const TowerD
     return true;
 }
 
+bool TowerDefenseScene::TryCastBoulder(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer)
+{
+    if (offer.kind != TowerDefenseOfferKind::Boulder || m_mode != TowerDefenseMode::Playing) return false;
+    if (m_enemyPaths.empty() || m_gold < offer.cost) return false;
+    if (m_consumableCooldown > 0.0f) return false;
+
+    m_gold -= offer.cost;
+    SpawnRollingBoulder(terrainPoint, offer.tier);
+    m_consumableCooldown = m_consumableCooldownDuration;
+    return true;
+}
+
 bool TowerDefenseScene::TryBoostTower(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer)
 {
     if (offer.kind != TowerDefenseOfferKind::Boost || m_mode != TowerDefenseMode::Playing) return false;
     if (m_gold < offer.cost || m_consumableCooldown > 0.0f) return false;
 
-    TowerDefenseTower* tower = FindTowerAtPoint(terrainPoint);
+    TowerDefenseTower* tower = nullptr;
+    float bestDistanceSq = 2.40f * 2.40f;
+    for (auto& candidate : m_towers)
+    {
+        if (!candidate.object) continue;
+
+        const float distanceSq = DistanceSqXZ(candidate.position, terrainPoint);
+        if (distanceSq <= bestDistanceSq)
+        {
+            bestDistanceSq = distanceSq;
+            tower = &candidate;
+        }
+    }
+
+    if (!tower)
+    {
+        if (auto selected = m_selectedTower.lock())
+        {
+            const int index = FindTowerIndexByObject(selected);
+            if (index >= 0 && index < static_cast<int>(m_towers.size()))
+            {
+                tower = &m_towers[index];
+            }
+        }
+    }
     if (!tower || !tower->object) return false;
 
     const int tier = clamp(offer.tier, 1, MaxTowerTier);
@@ -4276,13 +5110,7 @@ void TowerDefenseScene::HandleClick(HWND hWnd)
 {
     if (m_mode == TowerDefenseMode::StartScreen)
     {
-        XMFLOAT3 point{};
-        if (!TryGetGroundPoint(hWnd, point)) return;
-
-        if (fabsf(point.x) <= 2.15f && fabsf(point.z) <= 1.05f)
-        {
-            StartGame();
-        }
+        TryHandleStartMenuClick(hWnd);
         return;
     }
 
@@ -4374,8 +5202,15 @@ void TowerDefenseScene::BeginTowerDrag(int offerSlot)
         break;
     case TowerDefenseOfferKind::Boost:
         dragColor = XMFLOAT4{ 0.35f, 1.0f, 0.18f, 0.42f };
-        visualSize = XMFLOAT3{ 0.92f, 0.050f, 0.92f };
+        visualSize = XMFLOAT3{ 2.40f, 0.050f, 2.40f };
         break;
+    case TowerDefenseOfferKind::Boulder:
+    {
+        const float radius = BoulderRadius(m_dragTier);
+        dragColor = XMFLOAT4{ 0.56f, 0.52f, 0.42f, 0.48f };
+        visualSize = XMFLOAT3{ radius, radius, radius };
+        break;
+    }
     case TowerDefenseOfferKind::Generator:
     {
         const float tierScale = TowerVisualScale(m_dragTier);
@@ -4397,6 +5232,10 @@ void TowerDefenseScene::BeginTowerDrag(int offerSlot)
         XMFLOAT3{ 0.0f, -1000.0f, 0.0f },
         visualSize,
         m_dragGhostMaterial);
+    if (m_dragOffer.kind == TowerDefenseOfferKind::Boulder && m_boulderMesh)
+    {
+        m_dragGhost->SetMesh(m_boulderMesh);
+    }
     m_objects.push_back(m_dragGhost);
 }
 
@@ -4456,6 +5295,9 @@ void TowerDefenseScene::EndTowerDrag(HWND hWnd)
                 break;
             case TowerDefenseOfferKind::Boost:
                 placed = TryBoostTower(point, m_dragOffer);
+                break;
+            case TowerDefenseOfferKind::Boulder:
+                placed = TryCastBoulder(point, m_dragOffer);
                 break;
             case TowerDefenseOfferKind::Generator:
                 placed = TryPlaceGenerator(point, m_dragOffer);
@@ -4646,6 +5488,12 @@ bool TowerDefenseScene::OnKeyDown(WPARAM wParam)
         return true;
     }
 
+    if (wParam == 'F' && m_mode == TowerDefenseMode::Playing)
+    {
+        m_gameSpeedIndex = (m_gameSpeedIndex + 1) % 3;
+        return true;
+    }
+
     if (wParam == VK_ESCAPE && m_mode != TowerDefenseMode::StartScreen)
     {
         BuildStartScreen();
@@ -4656,6 +5504,20 @@ bool TowerDefenseScene::OnKeyDown(WPARAM wParam)
     {
         StartGame();
         return true;
+    }
+
+    if (m_mode == TowerDefenseMode::StartScreen)
+    {
+        if (wParam >= '1' && wParam <= '3')
+        {
+            m_selectedStage = clamp(static_cast<int>(wParam - '1'), 0, StagePresetCount - 1);
+            return true;
+        }
+        if (wParam >= '4' && wParam <= '6')
+        {
+            m_selectedDifficulty = clamp(static_cast<int>(wParam - '4'), 0, DifficultyPresetCount - 1);
+            return true;
+        }
     }
 
     return false;
@@ -4694,6 +5556,7 @@ void TowerDefenseScene::Render(const ComPtr<ID3D12GraphicsCommandList>& commandL
     RenderBossRewardUI(commandList);
     RenderWaveRewardUI(commandList);
     RenderTowerInfoUI(commandList);
+    RenderDamagePopups(commandList);
     RenderResultUI(commandList);
 }
 
@@ -4703,6 +5566,8 @@ void TowerDefenseScene::ReleaseObjects()
     m_generators.clear();
     m_enemies.clear();
     m_hitMarkers.clear();
+    m_damagePopups.clear();
+    m_rollingBoulders.clear();
     m_scopeMarkers.clear();
     m_projectiles.clear();
     ClearDragGhost();
@@ -4710,9 +5575,12 @@ void TowerDefenseScene::ReleaseObjects()
     m_waypoints.clear();
     m_enemyPaths.clear();
     m_terrainHeightMap.reset();
+    m_stageHeightMaps.clear();
+    m_stageTerrainMeshes.clear();
     m_terrainCollider.reset();
     m_terrainObject.reset();
     m_towerModelMesh.reset();
+    m_boulderMesh.reset();
     m_towerModelParts.clear();
     m_shopPanel.reset();
     m_shopSlots.clear();
@@ -4731,6 +5599,7 @@ void TowerDefenseScene::ReleaseObjects()
     m_moonLight.reset();
     m_rightMouseOrbiting = false;
     m_shopCollapsed = false;
+    m_gameSpeedIndex = 0;
     m_cameraShakeTimer = 0.0f;
     m_cameraShakeDuration = 0.0f;
     m_cameraShakeIntensity = 0.0f;
@@ -4785,6 +5654,8 @@ void TowerDefenseScene::ReleaseObjects()
     m_freezeUiMaterial.reset();
     m_boostMaterial.reset();
     m_boostUiMaterial.reset();
+    m_boulderMaterial.reset();
+    m_boulderUiMaterial.reset();
     m_generatorMaterial.reset();
     m_generatorUiMaterial.reset();
     m_shopConsumableSlotMaterial.reset();
@@ -4940,6 +5811,59 @@ bool TowerDefenseScene::TryGetShopSlotFromCursor(HWND hWnd, int& outSlot) const
             outSlot = slot;
             return true;
         }
+    }
+
+    return false;
+}
+
+bool TowerDefenseScene::TryHandleStartMenuClick(HWND hWnd)
+{
+    if (m_mode != TowerDefenseMode::StartScreen) return false;
+
+    POINT cursor{};
+    float width = 0.0f;
+    float height = 0.0f;
+    if (!GetClientCursor(hWnd, cursor, width, height)) return false;
+
+    const float x = static_cast<float>(cursor.x) / width;
+    const float y = static_cast<float>(cursor.y) / height;
+    auto hitRect = [x, y](const XMFLOAT2& center, const XMFLOAT2& halfSize)
+        {
+            return fabsf(x - center.x) <= halfSize.x && fabsf(y - center.y) <= halfSize.y;
+        };
+
+    const float stageCenters[StagePresetCount]{ 0.345f, 0.500f, 0.655f };
+    for (int stage = 0; stage < StagePresetCount; ++stage)
+    {
+        if (hitRect(XMFLOAT2{ stageCenters[stage], 0.448f }, XMFLOAT2{ 0.066f, 0.035f }))
+        {
+            m_selectedStage = stage;
+            return true;
+        }
+    }
+
+    const float difficultyCenters[DifficultyPresetCount]{ 0.345f, 0.500f, 0.655f };
+    for (int difficulty = 0; difficulty < DifficultyPresetCount; ++difficulty)
+    {
+        if (hitRect(XMFLOAT2{ difficultyCenters[difficulty], 0.580f }, XMFLOAT2{ 0.066f, 0.035f }))
+        {
+            m_selectedDifficulty = difficulty;
+            return true;
+        }
+    }
+
+    if (hitRect(XMFLOAT2{ 0.5f, 0.805f }, XMFLOAT2{ 0.110f, 0.040f }))
+    {
+        StartGame();
+        return true;
+    }
+
+    XMFLOAT3 point{};
+    if (TryGetGroundPoint(hWnd, point) &&
+        fabsf(point.x) <= 2.15f && fabsf(point.z) <= 1.05f)
+    {
+        StartGame();
+        return true;
     }
 
     return false;
@@ -5457,17 +6381,17 @@ bool TowerDefenseScene::TryGetTowerUpgradeChoiceFromCursor(HWND hWnd, int& outTy
     float height = 0.0f;
     if (!GetClientCursor(hWnd, cursor, width, height)) return false;
 
-    constexpr float RowStartY = 0.715f;
-    constexpr float RowStep = 0.035f;
     for (int type = 0; type < TowerTypeCount; ++type)
     {
+        const int column = type % 3;
+        const int row = type / 3;
         const XMFLOAT2 center{
-            width * 0.132f,
-            height * (RowStartY + static_cast<float>(type) * RowStep)
+            width * (0.059f + static_cast<float>(column) * 0.073f),
+            height * (0.785f + static_cast<float>(row) * 0.108f)
         };
         const XMFLOAT2 halfSize{
-            max(72.0f, width * 0.106f),
-            max(14.0f, height * 0.015f)
+            max(26.0f, width * 0.030f),
+            max(24.0f, height * 0.030f)
         };
         if (fabsf(static_cast<float>(cursor.x) - center.x) <= halfSize.x &&
             fabsf(static_cast<float>(cursor.y) - center.y) <= halfSize.y)
@@ -5516,6 +6440,44 @@ float TowerDefenseScene::GetTowerDamageMultiplier(TowerDefenseTowerType type) co
     return 1.0f + static_cast<float>(level) * 0.16f;
 }
 
+float TowerDefenseScene::GetGameSpeedMultiplier() const
+{
+    switch (clamp(m_gameSpeedIndex, 0, 2))
+    {
+    case 1:
+        return 2.0f;
+    case 2:
+        return 3.0f;
+    default:
+        return 1.0f;
+    }
+}
+
+float TowerDefenseScene::GetDifficultyHealthMultiplier() const
+{
+    static constexpr float Values[DifficultyPresetCount]{ 0.82f, 1.0f, 1.30f };
+    return Values[clamp(m_selectedDifficulty, 0, DifficultyPresetCount - 1)];
+}
+
+float TowerDefenseScene::GetDifficultySpeedMultiplier() const
+{
+    static constexpr float Values[DifficultyPresetCount]{ 0.92f, 1.0f, 1.13f };
+    return Values[clamp(m_selectedDifficulty, 0, DifficultyPresetCount - 1)];
+}
+
+float TowerDefenseScene::GetDifficultyRewardMultiplier() const
+{
+    static constexpr float Values[DifficultyPresetCount]{ 1.05f, 1.0f, 1.28f };
+    return Values[clamp(m_selectedDifficulty, 0, DifficultyPresetCount - 1)];
+}
+
+int TowerDefenseScene::ScaleReward(int amount) const
+{
+    if (amount <= 0) return 0;
+
+    return max(1, static_cast<int>(floorf(static_cast<float>(amount) * GetDifficultyRewardMultiplier() + 0.5f)));
+}
+
 bool TowerDefenseScene::TryUpgradeTowerDamage(int typeIndex)
 {
     if (m_mode != TowerDefenseMode::Playing) return false;
@@ -5544,11 +6506,11 @@ bool TowerDefenseScene::TryGetBossRewardChoiceFromCursor(HWND hWnd, int& outChoi
     float height = 0.0f;
     if (!GetClientCursor(hWnd, cursor, width, height)) return false;
 
-    const float centers[3]{ 0.365f, 0.500f, 0.635f };
-    const XMFLOAT2 halfSize{ max(54.0f, width * 0.052f), max(38.0f, height * 0.048f) };
+    const float centers[3]{ 0.330f, 0.500f, 0.670f };
+    const XMFLOAT2 halfSize{ max(72.0f, width * 0.072f), max(50.0f, height * 0.062f) };
     for (int i = 0; i < 3; ++i)
     {
-        const XMFLOAT2 center{ width * centers[i], height * 0.440f };
+        const XMFLOAT2 center{ width * centers[i], height * 0.462f };
         if (fabsf(static_cast<float>(cursor.x) - center.x) <= halfSize.x &&
             fabsf(static_cast<float>(cursor.y) - center.y) <= halfSize.y)
         {
@@ -5570,7 +6532,7 @@ void TowerDefenseScene::ApplyBossRewardChoice(int choice)
     {
     case 1:
     {
-        const int bonusGold = 14 + rewardWave * 3;
+        const int bonusGold = ScaleReward(14 + rewardWave * 3);
         AddGold(bonusGold);
         XMFLOAT3 position = m_cameraFocus;
         position.y = TerrainHeightAtWorldXZ(position.x, position.z) + 0.75f;
@@ -5578,7 +6540,7 @@ void TowerDefenseScene::ApplyBossRewardChoice(int choice)
         break;
     }
     case 2:
-        m_lives += 5;
+        m_lives = min(m_maxLives, m_lives + 5);
         break;
     default:
         RollShopOffers(true);
@@ -5613,11 +6575,11 @@ bool TowerDefenseScene::TryGetWaveRewardChoiceFromCursor(HWND hWnd, int& outChoi
     float height = 0.0f;
     if (!GetClientCursor(hWnd, cursor, width, height)) return false;
 
-    const float centers[3]{ 0.365f, 0.500f, 0.635f };
-    const XMFLOAT2 halfSize{ max(54.0f, width * 0.052f), max(38.0f, height * 0.048f) };
+    const float centers[3]{ 0.330f, 0.500f, 0.670f };
+    const XMFLOAT2 halfSize{ max(72.0f, width * 0.072f), max(50.0f, height * 0.062f) };
     for (int i = 0; i < 3; ++i)
     {
-        const XMFLOAT2 center{ width * centers[i], height * 0.440f };
+        const XMFLOAT2 center{ width * centers[i], height * 0.462f };
         if (fabsf(static_cast<float>(cursor.x) - center.x) <= halfSize.x &&
             fabsf(static_cast<float>(cursor.y) - center.y) <= halfSize.y)
         {
@@ -5639,7 +6601,7 @@ void TowerDefenseScene::ApplyWaveRewardChoice(int choice)
     {
     case 1:
     {
-        const int bonusGold = 6 + rewardWave * 2;
+        const int bonusGold = ScaleReward(6 + rewardWave * 2);
         AddGold(bonusGold);
         XMFLOAT3 position = m_cameraFocus;
         position.y = TerrainHeightAtWorldXZ(position.x, position.z) + 0.70f;
@@ -5647,7 +6609,7 @@ void TowerDefenseScene::ApplyWaveRewardChoice(int choice)
         break;
     }
     case 2:
-        m_lives += 2;
+        m_lives = min(m_maxLives, m_lives + 2);
         break;
     default:
         RollShopOffers(true);
@@ -5677,7 +6639,7 @@ void TowerDefenseScene::AdvanceToNextWave()
     m_spawnedInWave = 0;
     m_spawnTimer = 0.0f;
     m_waveRunning = false;
-    AddGold(2);
+    AddGold(ScaleReward(2));
 }
 
 void TowerDefenseScene::AddGold(int amount)
@@ -5730,6 +6692,151 @@ XMFLOAT4X4 TowerDefenseScene::BuildCameraAnchoredUiMatrix(const XMFLOAT2& normal
         orientation *
         XMMatrixTranslation(position.x, position.y, position.z));
     return world;
+}
+
+XMFLOAT4X4 TowerDefenseScene::BuildCameraAnchoredModelMatrix(const XMFLOAT2& normalizedCenter,
+    float normalizedHeight,
+    float depth,
+    float yawRadians) const
+{
+    XMFLOAT4X4 world{};
+    XMStoreFloat4x4(&world, XMMatrixIdentity());
+    if (!m_camera || !g_framework || !m_towerModelMesh) return world;
+
+    depth = max(0.2f, depth);
+    normalizedHeight = max(0.001f, normalizedHeight);
+
+    const float aspect = max(0.1f, g_framework->GetAspectRatio());
+    const float viewHeight = 2.0f * depth * tanf(CameraFovY * 0.5f);
+    const float viewWidth = viewHeight * aspect;
+    const float xOffset = (normalizedCenter.x - 0.5f) * viewWidth;
+    const float yOffset = (0.5f - normalizedCenter.y) * viewHeight;
+
+    const XMFLOAT3 right = m_camera->GetU();
+    const XMFLOAT3 up = m_camera->GetV();
+    const XMFLOAT3 forward = m_camera->GetN();
+    const XMFLOAT3 position = Utiles::Vector3::Add(
+        m_camera->GetEye(),
+        Utiles::Vector3::Add(
+            Utiles::Vector3::Mul(forward, depth),
+            Utiles::Vector3::Add(
+                Utiles::Vector3::Mul(right, xOffset),
+                Utiles::Vector3::Mul(up, yOffset))));
+
+    const BoundingBox bounds = m_towerModelMesh->GetLocalAABB();
+    const float localHeight = max(0.001f, bounds.Extents.y * 2.0f);
+    const float localFootprint = max(0.001f, max(bounds.Extents.x, bounds.Extents.z) * 2.0f);
+    const float targetHeight = viewHeight * normalizedHeight;
+    const float targetFootprint = viewWidth * normalizedHeight * 0.62f;
+    const float modelScale = min(targetHeight / localHeight, targetFootprint / localFootprint);
+
+    XMMATRIX orientation = XMMatrixSet(
+        right.x, right.y, right.z, 0.0f,
+        up.x, up.y, up.z, 0.0f,
+        forward.x, forward.y, forward.z, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f);
+
+    XMStoreFloat4x4(&world,
+        XMMatrixTranslation(-bounds.Center.x, -bounds.Center.y, -bounds.Center.z) *
+        XMMatrixRotationY(yawRadians) *
+        XMMatrixScaling(modelScale, modelScale, modelScale) *
+        orientation *
+        XMMatrixTranslation(position.x, position.y, position.z));
+    return world;
+}
+
+void TowerDefenseScene::RenderTowerModelIcon(const ComPtr<ID3D12GraphicsCommandList>& commandList,
+    const shared_ptr<GameObject>& object,
+    TowerDefenseTowerType type,
+    int tier,
+    const XMFLOAT2& normalizedCenter,
+    float normalizedHeight,
+    float depth) const
+{
+    if (!object || !m_towerModelMesh) return;
+
+    tier = clamp(tier, 1, MaxTowerTier);
+    const int typeIndex = TowerTypeIndex(type);
+    object->SetMesh(m_towerModelMesh);
+    object->SetMaterial(m_towerModelMaterials[typeIndex][tier - 1]
+        ? m_towerModelMaterials[typeIndex][tier - 1]
+        : m_shopTowerMaterials[typeIndex][tier - 1]);
+    object->SetWorldMatrix(BuildCameraAnchoredModelMatrix(
+        normalizedCenter,
+        normalizedHeight,
+        depth,
+        XM_PIDIV4));
+    object->Render(commandList);
+}
+
+void TowerDefenseScene::RenderTierMarkers(const ComPtr<ID3D12GraphicsCommandList>& commandList,
+    const XMFLOAT2& normalizedCenter,
+    int tier,
+    float markerSize,
+    float spacing,
+    float depth,
+    size_t& widgetIndex) const
+{
+    if (m_hudWidgets.empty()) return;
+
+    tier = clamp(tier, 1, MaxTowerTier);
+    const float startX = normalizedCenter.x - spacing * static_cast<float>(tier - 1) * 0.5f;
+    const XMFLOAT2 offsets[5]{
+        XMFLOAT2{ 0.0f, 0.0f },
+        XMFLOAT2{ 0.0f, -markerSize * 0.72f },
+        XMFLOAT2{ markerSize * 0.72f, 0.0f },
+        XMFLOAT2{ 0.0f, markerSize * 0.72f },
+        XMFLOAT2{ -markerSize * 0.72f, 0.0f }
+    };
+
+    for (int star = 0; star < tier; ++star)
+    {
+        const XMFLOAT2 starCenter{
+            startX + spacing * static_cast<float>(star),
+            normalizedCenter.y
+        };
+
+        for (int piece = 0; piece < 5; ++piece)
+        {
+            if (widgetIndex >= m_hudWidgets.size() || !m_hudWidgets[widgetIndex]) return;
+
+            auto& widget = m_hudWidgets[widgetIndex++];
+            const float pieceSize = piece == 0 ? markerSize : markerSize * 0.52f;
+            widget->SetMesh(m_cube);
+            widget->SetMaterial(m_goldDigitMaterial);
+            widget->SetWorldMatrix(BuildCameraAnchoredUiMatrix(
+                XMFLOAT2{ starCenter.x + offsets[piece].x, starCenter.y + offsets[piece].y },
+                XMFLOAT2{ pieceSize, pieceSize },
+                depth,
+                0.018f));
+            widget->Render(commandList);
+        }
+    }
+}
+
+bool TowerDefenseScene::WorldToScreenUi(const XMFLOAT3& worldPosition,
+    XMFLOAT2& outNormalized,
+    float& outDepth) const
+{
+    if (!m_camera || !g_framework) return false;
+
+    const XMFLOAT3 delta = Utiles::Vector3::Sub(worldPosition, m_camera->GetEye());
+    const float depth = Utiles::Vector3::Dot(delta, m_camera->GetN());
+    if (depth <= 0.25f) return false;
+
+    const float aspect = max(0.1f, g_framework->GetAspectRatio());
+    const float halfViewHeight = depth * tanf(CameraFovY * 0.5f);
+    const float halfViewWidth = halfViewHeight * aspect;
+    if (halfViewHeight <= 0.001f || halfViewWidth <= 0.001f) return false;
+
+    const float viewX = Utiles::Vector3::Dot(delta, m_camera->GetU());
+    const float viewY = Utiles::Vector3::Dot(delta, m_camera->GetV());
+    outNormalized.x = 0.5f + viewX / (halfViewWidth * 2.0f);
+    outNormalized.y = 0.5f - viewY / (halfViewHeight * 2.0f);
+    outDepth = depth;
+
+    return outNormalized.x >= -0.08f && outNormalized.x <= 1.08f &&
+        outNormalized.y >= -0.08f && outNormalized.y <= 1.08f;
 }
 
 void TowerDefenseScene::ToggleGameplayView()

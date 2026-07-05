@@ -292,14 +292,20 @@ namespace
     }
 }
 
-TerrainHeightMap::TerrainHeightMap(UINT width, UINT length, float cellSpacing, vector<float> heights)
+TerrainHeightMap::TerrainHeightMap(UINT width,
+    UINT length,
+    float cellSpacing,
+    vector<float> heights,
+    vector<float> roadMask)
     : m_width(max(width, 2u)),
     m_length(max(length, 2u)),
     m_cellSpacing(max(cellSpacing, 0.001f)),
-    m_heights(std::move(heights))
+    m_heights(std::move(heights)),
+    m_roadMask(std::move(roadMask))
 {
     size_t expected = static_cast<size_t>(m_width) * m_length;
     if (m_heights.size() != expected) m_heights.assign(expected, 0.0f);
+    if (m_roadMask.size() != expected) m_roadMask.clear();
 }
 
 shared_ptr<TerrainHeightMap> TerrainHeightMap::CreateProcedural(UINT width, UINT length, float cellSpacing, float maxHeight)
@@ -594,6 +600,34 @@ float TerrainHeightMap::SampleHeight(float x, float z) const
     return h0 + (h1 - h0) * tz;
 }
 
+float TerrainHeightMap::SampleRoadMask(float x, float z) const
+{
+    if (m_roadMask.empty()) return 0.0f;
+
+    x = clamp(x, 0.0f, GetWorldWidth());
+    z = clamp(z, 0.0f, GetWorldLength());
+
+    float gridX = x / m_cellSpacing;
+    float gridZ = z / m_cellSpacing;
+
+    UINT x0 = min(static_cast<UINT>(floorf(gridX)), m_width - 1);
+    UINT z0 = min(static_cast<UINT>(floorf(gridZ)), m_length - 1);
+    UINT x1 = min(x0 + 1, m_width - 1);
+    UINT z1 = min(z0 + 1, m_length - 1);
+
+    float tx = gridX - static_cast<float>(x0);
+    float tz = gridZ - static_cast<float>(z0);
+
+    float r00 = RoadMaskAt(x0, z0);
+    float r10 = RoadMaskAt(x1, z0);
+    float r01 = RoadMaskAt(x0, z1);
+    float r11 = RoadMaskAt(x1, z1);
+
+    float r0 = r00 + (r10 - r00) * tx;
+    float r1 = r01 + (r11 - r01) * tx;
+    return clamp(r0 + (r1 - r0) * tz, 0.0f, 1.0f);
+}
+
 XMFLOAT3 TerrainHeightMap::SampleNormal(float x, float z) const
 {
     float left = SampleHeight(x - m_cellSpacing, z);
@@ -625,6 +659,15 @@ float TerrainHeightMap::HeightAt(UINT x, UINT z) const
     return m_heights[Index(x, z)];
 }
 
+float TerrainHeightMap::RoadMaskAt(UINT x, UINT z) const
+{
+    if (m_roadMask.empty()) return 0.0f;
+
+    x = min(x, m_width - 1);
+    z = min(z, m_length - 1);
+    return m_roadMask[Index(x, z)];
+}
+
 TerrainMesh::TerrainMesh(const ComPtr<ID3D12Device>& device,
     const ComPtr<ID3D12GraphicsCommandList>& commandList,
     const shared_ptr<const TerrainHeightMap>& heightMap)
@@ -645,7 +688,9 @@ TerrainMesh::TerrainMesh(const ComPtr<ID3D12Device>& device,
             float pz = static_cast<float>(z) * heightMap->GetCellSpacing();
             float height = heightMap->SampleHeight(px, pz);
             XMFLOAT4 terrainColor = GetTerrainColor(height, bounds);
-            terrainColor.w = TerrainRoadMask(px, pz, *heightMap);
+            terrainColor.w = heightMap->HasRoadMask()
+                ? heightMap->SampleRoadMask(px, pz)
+                : TerrainRoadMask(px, pz, *heightMap);
             vertices.push_back({
                 XMFLOAT3{ px, height, pz },
                 heightMap->SampleNormal(px, pz),

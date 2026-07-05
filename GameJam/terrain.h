@@ -7,7 +7,11 @@
 class TerrainHeightMap
 {
 public:
-    TerrainHeightMap(UINT width, UINT length, float cellSpacing, vector<float> heights);
+    TerrainHeightMap(UINT width,
+        UINT length,
+        float cellSpacing,
+        vector<float> heights,
+        vector<float> roadMask = {});
 
     static shared_ptr<TerrainHeightMap> CreateProcedural(UINT width, UINT length, float cellSpacing, float maxHeight);
     static shared_ptr<TerrainHeightMap> CreateWaveField(UINT width, UINT length, float cellSpacing, float amplitude, float frequency);
@@ -24,11 +28,14 @@ public:
 
     bool ContainsLocalXZ(float x, float z) const;
     float SampleHeight(float x, float z) const;
+    bool HasRoadMask() const { return !m_roadMask.empty(); }
+    float SampleRoadMask(float x, float z) const;
     XMFLOAT3 SampleNormal(float x, float z) const;
     BoundingBox GetLocalAABB() const;
 
 private:
     float HeightAt(UINT x, UINT z) const;
+    float RoadMaskAt(UINT x, UINT z) const;
     size_t Index(UINT x, UINT z) const { return static_cast<size_t>(z) * m_width + x; }
 
 private:
@@ -36,6 +43,7 @@ private:
     UINT m_length = 0;
     float m_cellSpacing = 1.0f;
     vector<float> m_heights;
+    vector<float> m_roadMask;
 };
 
 class TerrainMesh final : public IndexMesh

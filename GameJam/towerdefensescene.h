@@ -26,7 +26,8 @@ enum class TowerDefenseOfferKind
     Meteor,
     Freeze,
     Boost,
-    Generator
+    Generator,
+    Boulder
 };
 
 enum class TowerDefenseEnemyVariant
@@ -128,6 +129,33 @@ struct TowerDefenseHitMarker
     float gravity = 0.0f;
 };
 
+struct TowerDefenseDamagePopup
+{
+    XMFLOAT3 position{ 0.0f, 0.0f, 0.0f };
+    XMFLOAT3 velocity{ 0.0f, 0.0f, 0.0f };
+    wstring text;
+    float lifetime = 0.0f;
+    float maxLifetime = 0.0f;
+    float size = 0.025f;
+    TowerDefenseTowerType type = TowerDefenseTowerType::Basic;
+};
+
+struct TowerDefenseRollingBoulder
+{
+    shared_ptr<GameObject> object;
+    vector<weak_ptr<GameObject>> hitEnemies;
+    size_t routeIndex = 0;
+    size_t waypointIndex = 1;
+    XMFLOAT3 position{ 0.0f, 0.0f, 0.0f };
+    XMFLOAT3 direction{ 1.0f, 0.0f, 0.0f };
+    float radius = 0.75f;
+    float speed = 4.5f;
+    float damage = 80.0f;
+    float lifetime = 8.0f;
+    float rollAngle = 0.0f;
+    int tier = 1;
+};
+
 struct TowerDefenseScopeMarker
 {
     vector<shared_ptr<GameObject>> objects;
@@ -196,6 +224,8 @@ private:
     void BuildWaveUI();
     void BuildBossHealthUI();
     void BuildBitmapTextPool();
+    void BuildStageTerrainAssets(const ComPtr<ID3D12Device>& device,
+        const ComPtr<ID3D12GraphicsCommandList>& commandList);
     void BuildTowerModelAssets(const ComPtr<ID3D12Device>& device,
         const ComPtr<ID3D12GraphicsCommandList>& commandList);
     void LoadBitmapFont();
@@ -219,6 +249,7 @@ private:
     void RenderBossIntroUI(const ComPtr<ID3D12GraphicsCommandList>& commandList) const;
     void RenderBossRewardUI(const ComPtr<ID3D12GraphicsCommandList>& commandList) const;
     void RenderWaveRewardUI(const ComPtr<ID3D12GraphicsCommandList>& commandList) const;
+    void RenderDamagePopups(const ComPtr<ID3D12GraphicsCommandList>& commandList) const;
     void BeginBitmapTextPass() const;
     void RenderBitmapText(const ComPtr<ID3D12GraphicsCommandList>& commandList,
         const wstring& text,
@@ -235,6 +266,8 @@ private:
     void UpdateGenerators(float timeElapsed);
     void UpdateProjectiles(float timeElapsed);
     void UpdateHitMarkers(float timeElapsed);
+    void UpdateDamagePopups(float timeElapsed);
+    void UpdateRollingBoulders(float timeElapsed);
     void UpdateScopeMarkers(float timeElapsed);
     void UpdateDragPreview(HWND hWnd);
     void UpdateEnemyHealthBars();
@@ -262,12 +295,17 @@ private:
     void SpawnHitMarker(const XMFLOAT3& position,
         TowerDefenseTowerType type = TowerDefenseTowerType::Basic,
         float scale = 1.0f);
+    void SpawnDamagePopup(const XMFLOAT3& position,
+        float damage,
+        TowerDefenseTowerType type,
+        float scale = 1.0f);
     void SpawnDeathEffect(const XMFLOAT3& position, float scale);
     void SpawnCoinDropEffect(const XMFLOAT3& position, int amount);
     void SpawnMergeEffect(const XMFLOAT3& position, TowerDefenseTowerType type, int tier);
     void SpawnMeteorStrike(const XMFLOAT3& position, int tier);
     void SpawnFreezeField(const XMFLOAT3& position, int tier);
     void SpawnBoostEffect(const XMFLOAT3& position, int tier);
+    void SpawnRollingBoulder(const XMFLOAT3& position, int tier);
     void SpawnParticle(const XMFLOAT3& position,
         const XMFLOAT3& velocity,
         const XMFLOAT3& scale,
@@ -279,6 +317,7 @@ private:
     bool TryPlaceTower(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer);
     bool TryCastMeteor(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer);
     bool TryCastFreeze(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer);
+    bool TryCastBoulder(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer);
     bool TryBoostTower(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer);
     bool TryPlaceGenerator(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer);
     bool TryMergeOfferWithTower(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer);
@@ -316,6 +355,7 @@ private:
     bool TryGetPointOnPlane(HWND hWnd, float planeY, XMFLOAT3& outPoint) const;
     bool TryGetTerrainPoint(HWND hWnd, XMFLOAT3& outPoint) const;
     bool TryGetShopSlotFromCursor(HWND hWnd, int& outSlot) const;
+    bool TryHandleStartMenuClick(HWND hWnd);
     bool CanPlaceTower(const XMFLOAT3& terrainPoint) const;
     bool CanMergeOfferAtPoint(const XMFLOAT3& terrainPoint, const TowerDefenseOffer& offer) const;
     bool CanMergeDraggedTowerAtPoint(const XMFLOAT3& terrainPoint) const;
@@ -346,6 +386,11 @@ private:
     void ToggleShopCollapsed();
     int GetTowerDamageUpgradeCost(int typeIndex) const;
     float GetTowerDamageMultiplier(TowerDefenseTowerType type) const;
+    float GetGameSpeedMultiplier() const;
+    float GetDifficultyHealthMultiplier() const;
+    float GetDifficultySpeedMultiplier() const;
+    float GetDifficultyRewardMultiplier() const;
+    int ScaleReward(int amount) const;
     bool TryUpgradeTowerDamage(int typeIndex);
     bool TryGetBossRewardChoiceFromCursor(HWND hWnd, int& outChoice) const;
     void ApplyBossRewardChoice(int choice);
@@ -359,6 +404,27 @@ private:
         const XMFLOAT2& normalizedSize,
         float depth,
         float thickness) const;
+    XMFLOAT4X4 BuildCameraAnchoredModelMatrix(const XMFLOAT2& normalizedCenter,
+        float normalizedHeight,
+        float depth,
+        float yawRadians) const;
+    void RenderTowerModelIcon(const ComPtr<ID3D12GraphicsCommandList>& commandList,
+        const shared_ptr<GameObject>& object,
+        TowerDefenseTowerType type,
+        int tier,
+        const XMFLOAT2& normalizedCenter,
+        float normalizedHeight,
+        float depth) const;
+    void RenderTierMarkers(const ComPtr<ID3D12GraphicsCommandList>& commandList,
+        const XMFLOAT2& normalizedCenter,
+        int tier,
+        float markerSize,
+        float spacing,
+        float depth,
+        size_t& widgetIndex) const;
+    bool WorldToScreenUi(const XMFLOAT3& worldPosition,
+        XMFLOAT2& outNormalized,
+        float& outDepth) const;
     void ToggleGameplayView();
     void MoveGameplayCamera(const XMFLOAT3& delta);
     void UpdateAngledMouseOrbit(HWND hWnd);
@@ -388,6 +454,8 @@ private:
     static constexpr int MaxTowerTier = 3;
     static constexpr int MaxTowerDamageUpgradeLevel = 5;
     static constexpr int MaxWave = 6;
+    static constexpr int StagePresetCount = 3;
+    static constexpr int DifficultyPresetCount = 3;
 
     TowerDefenseMode m_mode = TowerDefenseMode::StartScreen;
     vector<XMFLOAT3> m_waypoints;
@@ -396,6 +464,8 @@ private:
     vector<TowerDefenseGenerator> m_generators;
     vector<TowerDefenseEnemy> m_enemies;
     vector<TowerDefenseHitMarker> m_hitMarkers;
+    vector<TowerDefenseDamagePopup> m_damagePopups;
+    vector<TowerDefenseRollingBoulder> m_rollingBoulders;
     vector<TowerDefenseScopeMarker> m_scopeMarkers;
     vector<TowerDefenseProjectile> m_projectiles;
 
@@ -433,6 +503,8 @@ private:
     shared_ptr<Material> m_freezeUiMaterial;
     shared_ptr<Material> m_boostMaterial;
     shared_ptr<Material> m_boostUiMaterial;
+    shared_ptr<Material> m_boulderMaterial;
+    shared_ptr<Material> m_boulderUiMaterial;
     shared_ptr<Material> m_generatorMaterial;
     shared_ptr<Material> m_generatorUiMaterial;
     shared_ptr<Material> m_shopConsumableSlotMaterial;
@@ -453,9 +525,12 @@ private:
     shared_ptr<Material> m_moonMaterial;
 
     shared_ptr<TerrainHeightMap> m_terrainHeightMap;
+    vector<shared_ptr<TerrainHeightMap>> m_stageHeightMaps;
+    vector<shared_ptr<Mesh>> m_stageTerrainMeshes;
     shared_ptr<TerrainCollider> m_terrainCollider;
     shared_ptr<GameObject> m_terrainObject;
     shared_ptr<Mesh> m_towerModelMesh;
+    shared_ptr<Mesh> m_boulderMesh;
     vector<TowerDefenseTowerModelPart> m_towerModelParts;
     shared_ptr<GameObject> m_shopPanel;
     vector<shared_ptr<GameObject>> m_shopSlots;
@@ -481,6 +556,9 @@ private:
     bool m_topDownView = false;
     int m_dragOfferSlot = 0;
     int m_dragTier = 1;
+    int m_gameSpeedIndex = 0;
+    int m_selectedStage = 0;
+    int m_selectedDifficulty = 1;
     POINT m_lastOrbitCursor{};
     XMFLOAT3 m_cameraFocus{ 0.0f, 0.0f, 0.0f };
     float m_cameraZoom = 42.0f;
@@ -506,6 +584,7 @@ private:
     int m_wave = 1;
     int m_spawnedInWave = 0;
     int m_lives = 20;
+    int m_maxLives = 20;
     int m_gold = 10;
     bool m_waveRunning = false;
     bool m_bossRewardPending = false;
