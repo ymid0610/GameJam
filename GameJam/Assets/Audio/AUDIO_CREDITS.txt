@@ -1,0 +1,4 @@
+Kenney UI Audio / Interface Sounds
+Source: https://kenney.nl/assets/ui-audio and https://kenney.nl/assets/interface-sounds
+License: Creative Commons Zero (CC0)
+Converted to WAV for WinMM playback.

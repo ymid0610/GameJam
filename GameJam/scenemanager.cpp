@@ -65,6 +65,12 @@ void SceneManager::KeyboardEvent(UINT message, WPARAM wParam)
     if (m_scenes.back()->OnKeyDown(wParam)) return;
     if (wParam != VK_ESCAPE) return;
 
+    if (m_scenes.size() <= 1)
+    {
+        PostQuitMessage(0);
+        return;
+    }
+
     PopScene();
 }
 

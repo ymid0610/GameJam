@@ -2,10 +2,14 @@
 #include "framework.h"
 #include "towerdefenseroute.h"
 
+#include <array>
 #include <cctype>
 #include <cfloat>
 #include <filesystem>
 #include <fstream>
+#include <mmsystem.h>
+
+#pragma comment(lib, "winmm.lib")
 
 namespace
 {
@@ -46,6 +50,21 @@ namespace
         Panel,
         Track,
         Fill,
+        Count
+    };
+
+    enum class TowerDefenseSound : size_t
+    {
+        Click,
+        Confirm,
+        Error,
+        ShopReroll,
+        TowerPlace,
+        Coin,
+        TowerHit,
+        SpellCast,
+        WaveStart,
+        BossAlert,
         Count
     };
 
@@ -112,17 +131,17 @@ namespace
         switch (type)
         {
         case TowerDefenseTowerType::Rapid:
-            return L"RAP";
+            return L"\uC5F0\uC0AC";
         case TowerDefenseTowerType::Splash:
-            return L"BOM";
+            return L"\uD3ED\uBC1C";
         case TowerDefenseTowerType::Slow:
-            return L"SLOW";
+            return L"\uBE59\uACB0";
         case TowerDefenseTowerType::Mortar:
-            return L"MOR";
+            return L"\uBC15\uACA9";
         case TowerDefenseTowerType::Flak:
-            return L"AIR";
+            return L"\uB300\uACF5";
         default:
-            return L"BAS";
+            return L"\uAE30\uBCF8";
         }
     }
 
@@ -131,15 +150,15 @@ namespace
         switch (offer.kind)
         {
         case TowerDefenseOfferKind::Meteor:
-            return L"METEO";
+            return L"\uC6B4\uC11D";
         case TowerDefenseOfferKind::Freeze:
-            return L"SLOW";
+            return L"\uAC10\uC18D";
         case TowerDefenseOfferKind::Boost:
-            return L"POWER";
+            return L"\uAC15\uD654";
         case TowerDefenseOfferKind::Generator:
-            return L"COIN";
+            return L"\uAE08\uAD11";
         case TowerDefenseOfferKind::Boulder:
-            return L"ROCK";
+            return L"\uBC14\uC704";
         default:
             return TowerTypeShortName(offer.type);
         }
@@ -147,14 +166,24 @@ namespace
 
     const wchar_t* StagePresetName(int stage)
     {
-        static constexpr const wchar_t* Names[3] = { L"MEADOW", L"RIDGE", L"SPIRAL" };
+        static constexpr const wchar_t* Names[3] = { L"\uCD08\uC6D0", L"\uB2A5\uC120", L"\uC6D0\uD615" };
         return Names[clamp(stage, 0, 2)];
     }
 
     const wchar_t* DifficultyPresetName(int difficulty)
     {
-        static constexpr const wchar_t* Names[3] = { L"EASY", L"NORMAL", L"HARD" };
+        static constexpr const wchar_t* Names[3] = { L"\uC26C\uC6C0", L"\uBCF4\uD1B5", L"\uC5B4\uB824\uC6C0" };
         return Names[clamp(difficulty, 0, 2)];
+    }
+
+    bool ContainsHangul(const wstring& text)
+    {
+        return any_of(text.begin(), text.end(), [](wchar_t ch)
+            {
+                return (ch >= L'\xAC00' && ch <= L'\xD7A3') ||
+                    (ch >= L'\x1100' && ch <= L'\x11FF') ||
+                    (ch >= L'\x3130' && ch <= L'\x318F');
+            });
     }
 
     float StageStartX(int stage)
@@ -227,36 +256,58 @@ namespace
 
         if (stage == 2)
         {
-            const float startZ = StageBranchStartZ(stage, routeIndex);
-            if (t < 0.22f)
+            const XMFLOAT2 starts[TowerDefenseRoute::RouteCount]{
+                XMFLOAT2{ 0.50f, 0.045f },
+                XMFLOAT2{ 0.045f, 0.50f },
+                XMFLOAT2{ 0.50f, 0.955f }
+            };
+            const float entryAngles[TowerDefenseRoute::RouteCount]{
+                -XM_PIDIV2,
+                XM_PI,
+                XM_PIDIV2
+            };
+            constexpr XMFLOAT2 Center{ 0.50f, 0.50f };
+            constexpr XMFLOAT2 Exit{ 0.975f, 0.50f };
+            constexpr float EntryRadius = 0.285f;
+            constexpr float ExitRadius = 0.220f;
+
+            const XMFLOAT2 start = starts[routeIndex];
+            const float entryAngle = entryAngles[routeIndex];
+            const XMFLOAT2 entry{
+                Center.x + cosf(entryAngle) * EntryRadius,
+                Center.y + sinf(entryAngle) * EntryRadius
+            };
+
+            if (t < 0.24f)
             {
-                const float a = TowerDefenseRoute::Smooth01(t / 0.22f);
+                const float a = TowerDefenseRoute::Smooth01(t / 0.24f);
                 return XMFLOAT2{
-                    StageStartX(stage) + (0.36f - StageStartX(stage)) * a,
-                    startZ + (0.50f - startZ) * a
+                    start.x + (entry.x - start.x) * a,
+                    start.y + (entry.y - start.y) * a
                 };
             }
-            if (t < 0.78f)
+            if (t < 0.84f)
             {
-                const float a = (t - 0.22f) / 0.56f;
-                const float loops = 1.55f;
-                const float angle = XM_2PI * loops * a + static_cast<float>(routeIndex) * 0.46f;
-                const float radius = 0.245f - 0.080f * a;
+                const float a = (t - 0.24f) / 0.60f;
+                float deltaToRight = -entryAngle;
+                while (deltaToRight < 0.0f) deltaToRight += XM_2PI;
+                const float totalAngle = XM_2PI + deltaToRight;
+                const float angle = entryAngle + totalAngle * a;
+                const float radius = EntryRadius + (ExitRadius - EntryRadius) * TowerDefenseRoute::Smooth01(a);
                 return XMFLOAT2{
-                    0.50f + cosf(angle) * radius,
-                    0.50f + sinf(angle) * radius
+                    Center.x + cosf(angle) * radius,
+                    Center.y + sinf(angle) * radius
                 };
             }
 
-            const float a = TowerDefenseRoute::Smooth01((t - 0.78f) / 0.22f);
-            const float startAngle = XM_2PI * 1.55f + static_cast<float>(routeIndex) * 0.46f;
-            const XMFLOAT2 spiralEnd{
-                0.50f + cosf(startAngle) * 0.165f,
-                0.50f + sinf(startAngle) * 0.165f
+            const float a = TowerDefenseRoute::Smooth01((t - 0.84f) / 0.16f);
+            const XMFLOAT2 ringExit{
+                Center.x + ExitRadius,
+                Center.y
             };
             return XMFLOAT2{
-                spiralEnd.x + (StageEndX(stage) - spiralEnd.x) * a,
-                spiralEnd.y + (0.50f - spiralEnd.y) * a
+                ringExit.x + (Exit.x - ringExit.x) * a,
+                ringExit.y + (Exit.y - ringExit.y) * a
             };
         }
 
@@ -379,9 +430,12 @@ namespace
                     const float dx = nx - 0.50f;
                     const float dz = nz - 0.50f;
                     const float radial = sqrtf(dx * dx + dz * dz);
-                    const float outerWall = powf(clamp((radial - 0.22f) / 0.34f, 0.0f, 1.0f), 1.8f) * 5.2f;
-                    const float innerBasin = -2.5f * expf(-18.0f * radial * radial);
-                    height += outerWall + innerBasin - road * 0.85f;
+                    const float innerFloor = 1.0f - TowerDefenseRoute::Smooth01((radial - 0.165f) / 0.070f);
+                    const float innerLip = expf(-130.0f * (radial - 0.205f) * (radial - 0.205f)) * 1.45f;
+                    const float ringBank = expf(-80.0f * (radial - 0.300f) * (radial - 0.300f)) * 1.10f;
+                    const float outerWall = powf(clamp((radial - 0.285f) / 0.30f, 0.0f, 1.0f), 1.75f) * 4.75f;
+                    const float innerBasin = -3.35f * innerFloor;
+                    height += outerWall + ringBank + innerLip + innerBasin - road * 1.05f;
                 }
 
                 heights[index] = height;
@@ -725,6 +779,55 @@ namespace
         return {};
     }
 
+    const wchar_t* TowerDefenseSoundFileName(TowerDefenseSound sound)
+    {
+        switch (sound)
+        {
+        case TowerDefenseSound::Confirm:
+            return L"ui_confirm.wav";
+        case TowerDefenseSound::Error:
+            return L"ui_error.wav";
+        case TowerDefenseSound::ShopReroll:
+            return L"shop_reroll.wav";
+        case TowerDefenseSound::TowerPlace:
+            return L"tower_place.wav";
+        case TowerDefenseSound::Coin:
+            return L"coin.wav";
+        case TowerDefenseSound::TowerHit:
+            return L"tower_hit.wav";
+        case TowerDefenseSound::SpellCast:
+            return L"spell_cast.wav";
+        case TowerDefenseSound::WaveStart:
+            return L"wave_start.wav";
+        case TowerDefenseSound::BossAlert:
+            return L"boss_alert.wav";
+        default:
+            return L"ui_click.wav";
+        }
+    }
+
+    void PlayTowerDefenseSound(TowerDefenseSound sound, DWORD cooldownMs = 0)
+    {
+        const size_t index = static_cast<size_t>(sound);
+        if (index >= static_cast<size_t>(TowerDefenseSound::Count)) return;
+
+        static array<filesystem::path, static_cast<size_t>(TowerDefenseSound::Count)> cachedPaths{};
+        static array<ULONGLONG, static_cast<size_t>(TowerDefenseSound::Count)> lastPlayedMs{};
+
+        const ULONGLONG now = GetTickCount64();
+        if (cooldownMs > 0 && now - lastPlayedMs[index] < cooldownMs) return;
+        lastPlayedMs[index] = now;
+
+        if (cachedPaths[index].empty())
+        {
+            cachedPaths[index] = ResolveProjectAssetPath(
+                filesystem::path("Assets") / "Audio" / "KenneyUI" / TowerDefenseSoundFileName(sound));
+        }
+        if (cachedPaths[index].empty()) return;
+
+        PlaySoundW(cachedPaths[index].c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+    }
+
     struct TowerPartManifestRecord
     {
         string name;
@@ -898,11 +1001,11 @@ void TowerDefenseScene::BuildMaterials(const ComPtr<ID3D12Device>& device)
     m_fieldMaterial = Material::Create(device, m_shader, XMFLOAT4{ 1.0f, 1.0f, 1.0f, 1.0f });
     m_fieldMaterial->SetTerrainTexture(0.18f);
     m_blockedMaterial = Material::Create(device, m_shader, XMFLOAT4{ 0.24f, 0.29f, 0.36f, 1.0f });
-    m_shopPanelMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.025f, 0.032f, 0.040f, 0.94f });
-    m_shopPanelMaterial->SetEmission(XMFLOAT3{ 0.01f, 0.05f, 0.08f }, 0.22f);
-    m_shopSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.13f, 0.16f, 0.19f, 0.94f });
-    m_shopSlotMaterial->SetEmission(XMFLOAT3{ 0.04f, 0.10f, 0.14f }, 0.42f);
-    m_infoBarBackgroundMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.010f, 0.014f, 0.018f, 0.96f });
+    m_shopPanelMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.020f, 0.024f, 0.028f, 0.96f });
+    m_shopPanelMaterial->SetEmission(XMFLOAT3{ 0.05f, 0.08f, 0.09f }, 0.30f);
+    m_shopSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.105f, 0.120f, 0.116f, 0.95f });
+    m_shopSlotMaterial->SetEmission(XMFLOAT3{ 0.06f, 0.12f, 0.11f }, 0.50f);
+    m_infoBarBackgroundMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.006f, 0.008f, 0.010f, 0.97f });
     m_infoDamageMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.34f, 0.22f, 0.95f });
     m_infoDamageMaterial->SetEmission(XMFLOAT3{ 0.55f, 0.08f, 0.04f }, 0.25f);
     m_infoRangeMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.18f, 0.92f, 1.0f, 0.95f });
@@ -932,10 +1035,10 @@ void TowerDefenseScene::BuildMaterials(const ComPtr<ID3D12Device>& device)
     m_coinMaterial->SetEmission(XMFLOAT3{ 1.0f, 0.58f, 0.04f }, 1.65f);
     m_goldUiMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.82f, 0.16f, 0.95f });
     m_goldUiMaterial->SetEmission(XMFLOAT3{ 0.90f, 0.48f, 0.04f }, 0.70f);
-    m_goldDigitMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.92f, 0.22f, 1.0f });
-    m_goldDigitMaterial->SetEmission(XMFLOAT3{ 1.0f, 0.65f, 0.08f }, 0.88f);
-    m_bitmapTextMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.98f, 1.0f, 0.96f, 1.0f });
-    m_bitmapTextMaterial->SetEmission(XMFLOAT3{ 0.82f, 0.95f, 0.78f }, 0.78f);
+    m_goldDigitMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.90f, 0.26f, 1.0f });
+    m_goldDigitMaterial->SetEmission(XMFLOAT3{ 1.0f, 0.66f, 0.10f }, 0.95f);
+    m_bitmapTextMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.97f, 0.86f, 1.0f });
+    m_bitmapTextMaterial->SetEmission(XMFLOAT3{ 0.95f, 0.82f, 0.55f }, 0.62f);
     m_resultVictoryMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.18f, 0.95f, 0.38f, 0.88f });
     m_resultVictoryMaterial->SetEmission(XMFLOAT3{ 0.08f, 0.70f, 0.20f }, 0.70f);
     m_resultDefeatMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.22f, 0.18f, 0.88f });
@@ -976,10 +1079,10 @@ void TowerDefenseScene::BuildMaterials(const ComPtr<ID3D12Device>& device)
     m_generatorMaterial->SetEmission(XMFLOAT3{ 0.92f, 0.46f, 0.05f }, 0.85f);
     m_generatorUiMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 1.0f, 0.78f, 0.20f, 0.96f });
     m_generatorUiMaterial->SetEmission(XMFLOAT3{ 0.90f, 0.48f, 0.06f }, 0.82f);
-    m_shopConsumableSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.30f, 0.14f, 0.08f, 0.90f });
-    m_shopConsumableSlotMaterial->SetEmission(XMFLOAT3{ 0.30f, 0.08f, 0.02f }, 0.40f);
-    m_shopGeneratorSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.28f, 0.22f, 0.08f, 0.90f });
-    m_shopGeneratorSlotMaterial->SetEmission(XMFLOAT3{ 0.34f, 0.20f, 0.04f }, 0.42f);
+    m_shopConsumableSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.34f, 0.11f, 0.07f, 0.92f });
+    m_shopConsumableSlotMaterial->SetEmission(XMFLOAT3{ 0.42f, 0.09f, 0.03f }, 0.52f);
+    m_shopGeneratorSlotMaterial = Material::Create(device, m_overlayShader, XMFLOAT4{ 0.31f, 0.23f, 0.07f, 0.92f });
+    m_shopGeneratorSlotMaterial->SetEmission(XMFLOAT3{ 0.43f, 0.24f, 0.04f }, 0.55f);
 
     m_dragGhostMaterial = Material::Create(device, m_shader, TowerColor(TowerDefenseTowerType::Basic, 1, 0.38f));
     m_dragGhostMaterial->SetEmission(XMFLOAT3{ 0.30f, 0.55f, 1.0f }, 0.35f);
@@ -1026,7 +1129,7 @@ void TowerDefenseScene::BuildPath()
     const float width = m_terrainHeightMap->GetWorldWidth();
     const float length = m_terrainHeightMap->GetWorldLength();
     const int stage = clamp(m_selectedStage, 0, StagePresetCount - 1);
-    const int waypointCount = stage == 2 ? 58 : 34;
+    const int waypointCount = stage == 2 ? 76 : 34;
 
     for (int route = 0; route < TowerDefenseRoute::RouteCount; ++route)
     {
@@ -1143,6 +1246,8 @@ void TowerDefenseScene::BuildStartScreen()
 
 void TowerDefenseScene::StartGame()
 {
+    PlayTowerDefenseSound(TowerDefenseSound::Confirm);
+
     m_mode = TowerDefenseMode::Playing;
     m_objects.clear();
     m_towers.clear();
@@ -1434,8 +1539,8 @@ void TowerDefenseScene::BuildBossHealthUI()
 void TowerDefenseScene::BuildBitmapTextPool()
 {
     m_bitmapTextRects.clear();
-    m_bitmapTextRects.reserve(12000);
-    for (int i = 0; i < 12000; ++i)
+    m_bitmapTextRects.reserve(26000);
+    for (int i = 0; i < 26000; ++i)
     {
         m_bitmapTextRects.push_back(CreateCubeObject("Bitmap Text Rect",
             XMFLOAT3{ 0.0f, -1000.0f, 0.0f },
@@ -1743,8 +1848,13 @@ void TowerDefenseScene::RollShopOffers(bool freeReroll)
     if (m_mode == TowerDefenseMode::Playing && !freeReroll)
     {
         const int rerollCost = GetRerollCost();
-        if (m_gold < rerollCost) return;
+        if (m_gold < rerollCost)
+        {
+            PlayTowerDefenseSound(TowerDefenseSound::Error);
+            return;
+        }
         m_gold -= rerollCost;
+        PlayTowerDefenseSound(TowerDefenseSound::ShopReroll);
     }
 
     for (auto& offer : m_shopOffers)
@@ -1825,14 +1935,14 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
     {
         const XMFLOAT2 buttonCenter = m_shopCollapsed
             ? XMFLOAT2{ 0.5f, 0.945f }
-            : XMFLOAT2{ 0.5f, 0.760f };
-        const XMFLOAT2 buttonSize{ 0.110f, 0.045f };
+            : XMFLOAT2{ 0.5f, 0.742f };
+        const XMFLOAT2 buttonSize{ 0.128f, 0.047f };
         m_shopPanel->SetMaterial(m_shopCollapsed ? m_goldUiMaterial : m_shopSlotMaterial);
         XMFLOAT4X4 buttonWorld = BuildCameraAnchoredUiMatrix(buttonCenter, buttonSize, 4.12f, 0.032f);
         m_shopPanel->SetWorldMatrix(buttonWorld);
         m_shopPanel->Render(commandList);
         RenderBitmapText(commandList,
-            m_shopCollapsed ? L"SHOP" : L"HIDE",
+            m_shopCollapsed ? L"\uC0C1\uC810" : L"\uC811\uAE30",
             XMFLOAT2{ buttonCenter.x, buttonCenter.y - 0.012f },
             0.026f,
             3.72f,
@@ -1846,13 +1956,30 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
     {
         m_shopPanel->SetMaterial(m_shopPanelMaterial);
         XMFLOAT4X4 world = BuildCameraAnchoredUiMatrix(
-            XMFLOAT2{ 0.5f, 0.865f },
-            XMFLOAT2{ 0.38f, 0.16f },
+            XMFLOAT2{ 0.5f, 0.862f },
+            XMFLOAT2{ 0.445f, 0.198f },
             4.2f,
             0.025f);
         m_shopPanel->SetWorldMatrix(world);
         m_shopPanel->Render(commandList);
+
+        m_shopPanel->SetMaterial(m_goldUiMaterial);
+        XMFLOAT4X4 accentWorld = BuildCameraAnchoredUiMatrix(
+            XMFLOAT2{ 0.5f, 0.765f },
+            XMFLOAT2{ 0.420f, 0.010f },
+            3.98f,
+            0.012f);
+        m_shopPanel->SetWorldMatrix(accentWorld);
+        m_shopPanel->Render(commandList);
     }
+
+    RenderBitmapText(commandList,
+        L"\uC0C1\uC810",
+        XMFLOAT2{ 0.326f, 0.783f },
+        0.027f,
+        3.72f,
+        m_bitmapTextMaterial,
+        0.5f);
 
     size_t objectIndex = 0;
     size_t markerWidgetIndex = 96;
@@ -1929,11 +2056,11 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
             }
 
             WCHAR costText[16]{};
-            swprintf_s(costText, L"%dC", offer.cost);
+            swprintf_s(costText, L"%d\uCF54\uC778", offer.cost);
             RenderBitmapText(commandList,
                 costText,
                 XMFLOAT2{ normalizedCenter.x, normalizedCenter.y + normalizedSlotSize.y * 0.25f },
-                0.025f,
+                0.021f,
                 3.72f,
                 m_gold >= offer.cost ? m_goldDigitMaterial : m_lifeUiMaterial,
                 0.5f);
@@ -1958,11 +2085,11 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
     }
 
     WCHAR rerollText[32]{};
-    swprintf_s(rerollText, L"R ROLL %dC", GetRerollCost());
+    swprintf_s(rerollText, L"R \uB9AC\uB864 %d\uCF54\uC778", GetRerollCost());
     RenderBitmapText(commandList,
         rerollText,
-        XMFLOAT2{ 0.5f, 0.928f },
-        0.030f,
+        XMFLOAT2{ 0.500f, 0.946f },
+        0.023f,
         3.72f,
         m_bitmapTextMaterial,
         0.5f);
@@ -1970,15 +2097,15 @@ void TowerDefenseScene::RenderShopUI(const ComPtr<ID3D12GraphicsCommandList>& co
     WCHAR itemCooldownText[32]{};
     if (m_consumableCooldown > 0.0f)
     {
-        swprintf_s(itemCooldownText, L"ITEM CD %.1f", m_consumableCooldown);
+        swprintf_s(itemCooldownText, L"\uC2A4\uD0AC \uCFE8 %.1f", m_consumableCooldown);
     }
     else
     {
-        swprintf_s(itemCooldownText, L"ITEM READY");
+        swprintf_s(itemCooldownText, L"\uC2A4\uD0AC \uC900\uBE44");
     }
     RenderBitmapText(commandList,
         itemCooldownText,
-        XMFLOAT2{ 0.5f, 0.956f },
+        XMFLOAT2{ 0.675f, 0.783f },
         0.022f,
         3.72f,
         m_consumableCooldown > 0.0f ? m_bossHealthFillMaterial : m_boostUiMaterial,
@@ -2130,10 +2257,16 @@ void TowerDefenseScene::RenderTowerInfoUI(const ComPtr<ID3D12GraphicsCommandList
 
     renderWidget(TowerInfoWidget::Panel,
         XMFLOAT2{ 0.835f, 0.150f },
-        XMFLOAT2{ 0.290f, 0.235f },
+        XMFLOAT2{ 0.300f, 0.245f },
         4.20f,
         0.025f,
         m_shopPanelMaterial);
+    renderWidget(TowerInfoWidget::Panel,
+        XMFLOAT2{ 0.835f, 0.036f },
+        XMFLOAT2{ 0.270f, 0.010f },
+        3.98f,
+        0.012f,
+        m_goldUiMaterial);
 
     const int tier = clamp(tower->tier, 1, 3);
     const int typeIndex = TowerTypeIndex(tower->type);
@@ -2144,9 +2277,11 @@ void TowerDefenseScene::RenderTowerInfoUI(const ComPtr<ID3D12GraphicsCommandList
             m_towerInfoWidgets[WidgetIndex(TowerInfoWidget::TowerIcon)],
             tower->type,
             tier,
-            XMFLOAT2{ 0.724f, 0.073f },
-            iconScale * 1.70f,
-            3.86f);
+            XMFLOAT2{ 0.716f, 0.088f },
+            iconScale * 1.52f,
+            3.86f,
+            XM_PIDIV4 * 1.25f,
+            -XM_PIDIV4 * 0.65f);
     }
     else
     {
@@ -2226,28 +2361,28 @@ void TowerDefenseScene::RenderTowerInfoUI(const ComPtr<ID3D12GraphicsCommandList
         cooldownReady, m_infoCooldownMaterial);
 
     WCHAR textBuffer[32]{};
-    swprintf_s(textBuffer, L"ATK %.0f", tower->damage);
+    swprintf_s(textBuffer, L"\uACF5\uACA9 %.0f", tower->damage);
     RenderBitmapText(commandList, textBuffer, XMFLOAT2{ 0.745f, 0.102f }, 0.024f, 3.78f, m_bitmapTextMaterial);
-    swprintf_s(textBuffer, L"RANGE %.1f", tower->range);
+    swprintf_s(textBuffer, L"\uC0AC\uAC70\uB9AC %.1f", tower->range);
     RenderBitmapText(commandList, textBuffer, XMFLOAT2{ 0.745f, 0.142f }, 0.024f, 3.78f, m_bitmapTextMaterial);
-    swprintf_s(textBuffer, L"SPD %.1f", attackRate);
+    swprintf_s(textBuffer, L"\uC18D\uB3C4 %.1f", attackRate);
     RenderBitmapText(commandList, textBuffer, XMFLOAT2{ 0.745f, 0.182f }, 0.024f, 3.78f, m_bitmapTextMaterial);
-    swprintf_s(textBuffer, L"CD %.0f%%", cooldownReady * 100.0f);
+    swprintf_s(textBuffer, L"\uC7A5\uC804 %.0f%%", cooldownReady * 100.0f);
     RenderBitmapText(commandList, textBuffer, XMFLOAT2{ 0.745f, 0.222f }, 0.024f, 3.78f, m_bitmapTextMaterial);
     if (tower->minRange > 0.05f)
     {
         WCHAR minText[32]{};
-        swprintf_s(minText, L"MIN %.1f", tower->minRange);
+        swprintf_s(minText, L"\uCD5C\uC18C %.1f", tower->minRange);
         RenderBitmapText(commandList, minText, XMFLOAT2{ 0.745f, 0.252f }, 0.020f, 3.78f, m_goldDigitMaterial);
-        RenderBitmapText(commandList, L"FAR ONLY", XMFLOAT2{ 0.835f, 0.252f }, 0.020f, 3.78f, m_bossHealthFillMaterial);
+        RenderBitmapText(commandList, L"\uC6D0\uAC70\uB9AC \uC804\uC6A9", XMFLOAT2{ 0.835f, 0.252f }, 0.020f, 3.78f, m_bossHealthFillMaterial);
     }
     else if (tier < MaxTowerTier)
     {
-        RenderBitmapText(commandList, L"MERGE SAME", XMFLOAT2{ 0.745f, 0.252f }, 0.020f, 3.78f, m_goldDigitMaterial);
+        RenderBitmapText(commandList, L"\uAC19\uC740 \uBCC4 \uD569\uC131", XMFLOAT2{ 0.745f, 0.252f }, 0.020f, 3.78f, m_goldDigitMaterial);
     }
     else
     {
-        RenderBitmapText(commandList, L"MAX TIER", XMFLOAT2{ 0.745f, 0.252f }, 0.020f, 3.78f, m_goldDigitMaterial);
+        RenderBitmapText(commandList, L"\uCD5C\uACE0 \uB4F1\uAE09", XMFLOAT2{ 0.745f, 0.252f }, 0.020f, 3.78f, m_goldDigitMaterial);
     }
 }
 
@@ -2337,19 +2472,21 @@ void TowerDefenseScene::RenderStartScreenUI(const ComPtr<ID3D12GraphicsCommandLi
             widget->Render(commandList);
         };
 
-    renderWidget(XMFLOAT2{ 0.5f, 0.530f }, XMFLOAT2{ 0.570f, 0.455f }, 4.16f, 0.032f, m_shopPanelMaterial);
-    renderWidget(XMFLOAT2{ 0.5f, 0.805f }, XMFLOAT2{ 0.220f, 0.070f }, 3.96f, 0.040f, m_startMaterial);
+    renderWidget(XMFLOAT2{ 0.5f, 0.535f }, XMFLOAT2{ 0.610f, 0.495f }, 4.18f, 0.036f, m_goldUiMaterial);
+    renderWidget(XMFLOAT2{ 0.5f, 0.535f }, XMFLOAT2{ 0.590f, 0.475f }, 4.12f, 0.032f, m_shopPanelMaterial);
+    renderWidget(XMFLOAT2{ 0.5f, 0.805f }, XMFLOAT2{ 0.240f, 0.076f }, 3.94f, 0.044f, m_startMaterial);
+    renderWidget(XMFLOAT2{ 0.5f, 0.348f }, XMFLOAT2{ 0.420f, 0.010f }, 3.92f, 0.016f, m_goldUiMaterial);
 
     RenderBitmapText(commandList,
-        L"TOP DEFENSE",
-        XMFLOAT2{ 0.5f, 0.315f },
-        0.056f,
+        L"\uB79C\uB364 \uB514\uD39C\uC2A4",
+        XMFLOAT2{ 0.5f, 0.304f },
+        0.057f,
         3.70f,
         m_bitmapTextMaterial,
         0.5f);
 
     RenderBitmapText(commandList,
-        L"STAGE",
+        L"\uC2A4\uD14C\uC774\uC9C0",
         XMFLOAT2{ 0.5f, 0.394f },
         0.030f,
         3.70f,
@@ -2376,7 +2513,7 @@ void TowerDefenseScene::RenderStartScreenUI(const ComPtr<ID3D12GraphicsCommandLi
     }
 
     RenderBitmapText(commandList,
-        L"DIFFICULTY",
+        L"\uB09C\uC774\uB3C4",
         XMFLOAT2{ 0.5f, 0.526f },
         0.030f,
         3.70f,
@@ -2407,7 +2544,7 @@ void TowerDefenseScene::RenderStartScreenUI(const ComPtr<ID3D12GraphicsCommandLi
 
     WCHAR ruleText[96]{};
     swprintf_s(ruleText,
-        L"HP %.0f%%  SPD %.0f%%  REWARD %.0f%%",
+        L"\uCCB4\uB825 %.0f%%  \uC18D\uB3C4 %.0f%%  \uBCF4\uC0C1 %.0f%%",
         GetDifficultyHealthMultiplier() * 100.0f,
         GetDifficultySpeedMultiplier() * 100.0f,
         GetDifficultyRewardMultiplier() * 100.0f);
@@ -2420,17 +2557,17 @@ void TowerDefenseScene::RenderStartScreenUI(const ComPtr<ID3D12GraphicsCommandLi
         0.5f);
 
     RenderBitmapText(commandList,
-        L"START",
+        L"\uAC8C\uC784 \uC2DC\uC791",
         XMFLOAT2{ 0.5f, 0.790f },
-        0.040f,
+        0.038f,
         3.64f,
         m_bitmapTextMaterial,
         0.5f);
 
     RenderBitmapText(commandList,
-        L"DRAG TOWER  R ROLL  V VIEW  F SPEED",
+        L"\uB9C8\uC6B0\uC2A4 \uBC30\uCE58  R \uB9AC\uB864  V \uC2DC\uC810  F \uBC30\uC18D  ESC \uC885\uB8CC",
         XMFLOAT2{ 0.5f, 0.868f },
-        0.024f,
+        0.021f,
         3.70f,
         m_goldDigitMaterial,
         0.5f);
@@ -2458,32 +2595,50 @@ void TowerDefenseScene::RenderGoldUI(const ComPtr<ID3D12GraphicsCommandList>& co
 
     renderWidget(GoldWidgetIndex(GoldUiWidget::Panel),
         XMFLOAT2{ 0.500f, 0.026f },
-        XMFLOAT2{ 1.040f, 0.056f },
+        XMFLOAT2{ 1.040f, 0.066f },
         4.18f,
         0.018f,
         m_shopPanelMaterial);
+    renderWidget(GoldWidgetIndex(GoldUiWidget::Panel),
+        XMFLOAT2{ 0.500f, 0.060f },
+        XMFLOAT2{ 1.040f, 0.006f },
+        3.96f,
+        0.012f,
+        m_goldUiMaterial);
+    renderWidget(GoldWidgetIndex(GoldUiWidget::Panel),
+        XMFLOAT2{ 0.088f, 0.031f },
+        XMFLOAT2{ 0.170f, 0.046f },
+        4.05f,
+        0.020f,
+        m_infoBarBackgroundMaterial);
+    renderWidget(GoldWidgetIndex(GoldUiWidget::Panel),
+        XMFLOAT2{ 0.270f, 0.031f },
+        XMFLOAT2{ 0.190f, 0.046f },
+        4.05f,
+        0.020f,
+        m_infoBarBackgroundMaterial);
 
     renderWidget(GoldWidgetIndex(GoldUiWidget::Coin),
-        XMFLOAT2{ 0.884f, 0.030f },
+        XMFLOAT2{ 0.196f, 0.032f },
         XMFLOAT2{ 0.022f, 0.022f },
         3.92f,
         0.050f,
         m_goldUiMaterial);
 
     renderWidget(GoldWidgetIndex(GoldUiWidget::Life),
-        XMFLOAT2{ 0.028f, 0.030f },
+        XMFLOAT2{ 0.030f, 0.032f },
         XMFLOAT2{ 0.024f, 0.024f },
         3.92f,
         0.050f,
         m_lifeUiMaterial);
 
     WCHAR goldText[32]{};
-    swprintf_s(goldText, L"%d C", max(0, m_gold));
-    RenderBitmapText(commandList, goldText, XMFLOAT2{ 0.972f, 0.014f }, 0.045f, 3.78f, m_goldDigitMaterial, 1.0f);
+    swprintf_s(goldText, L"\uCF54\uC778 %d", max(0, m_gold));
+    RenderBitmapText(commandList, goldText, XMFLOAT2{ 0.220f, 0.014f }, 0.034f, 3.78f, m_goldDigitMaterial);
 
     WCHAR lifeText[32]{};
-    swprintf_s(lifeText, L"%d/%d", max(0, m_lives), max(1, m_maxLives));
-    RenderBitmapText(commandList, lifeText, XMFLOAT2{ 0.052f, 0.014f }, 0.045f, 3.78f, m_lifeUiMaterial);
+    swprintf_s(lifeText, L"\uC0DD\uBA85 %d/%d", max(0, m_lives), max(1, m_maxLives));
+    RenderBitmapText(commandList, lifeText, XMFLOAT2{ 0.052f, 0.014f }, 0.034f, 3.78f, m_lifeUiMaterial);
 }
 
 void TowerDefenseScene::RenderWavePreviewUI(const ComPtr<ID3D12GraphicsCommandList>& commandList) const
@@ -2509,26 +2664,26 @@ void TowerDefenseScene::RenderWavePreviewUI(const ComPtr<ID3D12GraphicsCommandLi
 
     renderWidget(WaveUiWidget::Panel,
         XMFLOAT2{ 0.500f, 0.032f },
-        XMFLOAT2{ 0.270f, 0.050f },
-        4.18f,
-        0.014f,
-        m_shopPanelMaterial);
+        XMFLOAT2{ 0.315f, 0.052f },
+        4.08f,
+        0.018f,
+        m_infoBarBackgroundMaterial);
 
     renderWidget(WaveUiWidget::Panel,
         XMFLOAT2{ 0.500f, 0.083f },
-        XMFLOAT2{ 0.105f, 0.042f },
-        4.16f,
-        0.022f,
+        XMFLOAT2{ 0.120f, 0.045f },
+        4.00f,
+        0.026f,
         m_waveRunning ? m_bossHealthFillMaterial : m_goldUiMaterial);
 
     const int waveSize = GetWaveSize(m_wave);
     const int remainingToSpawn = max(0, waveSize - m_spawnedInWave);
     WCHAR waveText[64]{};
-    swprintf_s(waveText, L"WAVE %d-%d", m_wave, MaxWave);
+    swprintf_s(waveText, L"\uC6E8\uC774\uBE0C %d / %d", m_wave, MaxWave);
     RenderBitmapText(commandList,
         waveText,
-        XMFLOAT2{ 0.500f, 0.008f },
-        0.045f,
+        XMFLOAT2{ 0.500f, 0.010f },
+        0.038f,
         3.78f,
         m_bitmapTextMaterial,
         0.5f);
@@ -2536,23 +2691,23 @@ void TowerDefenseScene::RenderWavePreviewUI(const ComPtr<ID3D12GraphicsCommandLi
     WCHAR previewText[64]{};
     if (GetActiveBoss())
     {
-        swprintf_s(previewText, L"BOSS LIVE");
+        swprintf_s(previewText, L"\uBCF4\uC2A4 \uC804\uD22C \uC911");
     }
     else if (IsBossWave(m_wave) && remainingToSpawn > 0)
     {
-        swprintf_s(previewText, L"BOSS SOON");
+        swprintf_s(previewText, L"\uBCF4\uC2A4 \uB4F1\uC7A5 \uC900\uBE44");
     }
     else if (m_wave < MaxWave)
     {
         const int nextWave = m_wave + 1;
         swprintf_s(previewText,
-            IsBossWave(nextWave) ? L"NEXT W%d BOSS" : L"NEXT W%d %d ENM",
+            IsBossWave(nextWave) ? L"\uB2E4\uC74C %d \uBCF4\uC2A4" : L"\uB2E4\uC74C %d  %d\uB9C8\uB9AC",
             nextWave,
             GetWaveSize(nextWave));
     }
     else
     {
-        swprintf_s(previewText, L"FINAL WAVE");
+        swprintf_s(previewText, L"\uCD5C\uC885 \uC6E8\uC774\uBE0C");
     }
 
     RenderBitmapText(commandList,
@@ -2563,7 +2718,7 @@ void TowerDefenseScene::RenderWavePreviewUI(const ComPtr<ID3D12GraphicsCommandLi
         IsBossWave(m_wave) || GetActiveBoss() ? m_bossHealthFillMaterial : m_goldDigitMaterial,
         0.5f);
 
-    const wchar_t* toggleText = (m_bossRewardPending || m_waveRewardPending) ? L"PICK" : (m_waveRunning ? L"STOP" : L"START");
+    const wchar_t* toggleText = (m_bossRewardPending || m_waveRewardPending) ? L"\uC120\uD0DD" : (m_waveRunning ? L"\uC815\uC9C0" : L"\uC2DC\uC791");
     RenderBitmapText(commandList,
         toggleText,
         XMFLOAT2{ 0.500f, 0.071f },
@@ -2573,7 +2728,7 @@ void TowerDefenseScene::RenderWavePreviewUI(const ComPtr<ID3D12GraphicsCommandLi
         0.5f);
 
     WCHAR speedText[16]{};
-    swprintf_s(speedText, L"F x%.0f", GetGameSpeedMultiplier());
+    swprintf_s(speedText, L"F %.0f\uBC30", GetGameSpeedMultiplier());
     RenderBitmapText(commandList,
         speedText,
         XMFLOAT2{ 0.590f, 0.071f },
@@ -2606,9 +2761,10 @@ void TowerDefenseScene::RenderTowerUpgradeUI(const ComPtr<ID3D12GraphicsCommandL
             widget->Render(commandList);
         };
 
-    renderWidget(XMFLOAT2{ 0.132f, 0.835f }, XMFLOAT2{ 0.245f, 0.285f }, 4.14f, 0.024f, m_shopPanelMaterial);
+    renderWidget(XMFLOAT2{ 0.132f, 0.835f }, XMFLOAT2{ 0.255f, 0.292f }, 4.14f, 0.024f, m_goldUiMaterial);
+    renderWidget(XMFLOAT2{ 0.132f, 0.835f }, XMFLOAT2{ 0.240f, 0.278f }, 4.08f, 0.022f, m_shopPanelMaterial);
     RenderBitmapText(commandList,
-        L"DAMAGE UP",
+        L"\uD0C0\uC6CC \uAC15\uD654",
         XMFLOAT2{ 0.132f, 0.710f },
         0.027f,
         3.72f,
@@ -2663,21 +2819,21 @@ void TowerDefenseScene::RenderTowerUpgradeUI(const ComPtr<ID3D12GraphicsCommandL
             0.5f);
 
         WCHAR levelText[16]{};
-        swprintf_s(levelText, L"LV%d", level);
+        swprintf_s(levelText, L"\uAC15\uD654%d", level);
         RenderBitmapText(commandList,
             levelText,
             XMFLOAT2{ x, y + 0.017f },
-            0.017f,
+            0.015f,
             3.70f,
             affordable || maxed ? m_goldDigitMaterial : m_lifeUiMaterial,
             0.5f);
 
         WCHAR costText[16]{};
-        swprintf_s(costText, maxed ? L"MAX" : L"%dC", cost);
+        swprintf_s(costText, maxed ? L"\uCD5C\uB300" : L"%d\uCF54\uC778", cost);
         RenderBitmapText(commandList,
             costText,
             XMFLOAT2{ x, y + 0.041f },
-            0.014f,
+            0.012f,
             3.70f,
             affordable ? m_goldDigitMaterial : m_lifeUiMaterial,
             0.5f);
@@ -2715,7 +2871,7 @@ void TowerDefenseScene::RenderMiniMapUI(const ComPtr<ID3D12GraphicsCommandList>&
     renderWidget(mapCenter, mapSize, 4.02f, 0.018f, m_infoBarBackgroundMaterial);
 
     RenderBitmapText(commandList,
-        L"MINI MAP",
+        L"\uBBF8\uB2C8\uB9F5",
         XMFLOAT2{ panelCenter.x, 0.790f },
         0.023f,
         3.72f,
@@ -2813,7 +2969,7 @@ void TowerDefenseScene::RenderBossHealthUI(const ComPtr<ID3D12GraphicsCommandLis
         m_bossHealthFillMaterial);
 
     WCHAR bossText[48]{};
-    swprintf_s(bossText, L"BOSS %.0f%%", ratio * 100.0f);
+    swprintf_s(bossText, L"\uBCF4\uC2A4 %.0f%%", ratio * 100.0f);
     RenderBitmapText(commandList,
         bossText,
         XMFLOAT2{ 0.325f, 0.126f },
@@ -2837,14 +2993,14 @@ void TowerDefenseScene::RenderBossIntroUI(const ComPtr<ID3D12GraphicsCommandList
     m_shopPanel->Render(commandList);
 
     RenderBitmapText(commandList,
-        L"BOSS INCOMING",
+        L"\uBCF4\uC2A4 \uB4F1\uC7A5",
         XMFLOAT2{ 0.5f, 0.280f },
         0.060f + pulse * 0.006f,
         3.68f,
         m_bitmapTextMaterial,
         0.5f);
     RenderBitmapText(commandList,
-        L"LONG RANGE READY",
+        L"\uC7A5\uAC70\uB9AC \uD654\uB825 \uC900\uBE44",
         XMFLOAT2{ 0.5f, 0.352f },
         0.028f,
         3.68f,
@@ -2867,7 +3023,7 @@ void TowerDefenseScene::RenderBossRewardUI(const ComPtr<ID3D12GraphicsCommandLis
     m_shopPanel->Render(commandList);
 
     RenderBitmapText(commandList,
-        L"BOSS REWARD",
+        L"\uBCF4\uC2A4 \uBCF4\uC0C1",
         XMFLOAT2{ 0.5f, 0.304f },
         0.054f,
         3.66f,
@@ -2880,9 +3036,9 @@ void TowerDefenseScene::RenderBossRewardUI(const ComPtr<ID3D12GraphicsCommandLis
         XMFLOAT2{ 0.670f, 0.462f }
     };
     WCHAR goldDetail[24]{};
-    swprintf_s(goldDetail, L"+%dC", ScaleReward(14 + max(1, m_bossRewardWave) * 3));
-    const wchar_t* labels[3]{ L"GOLD", L"LIFE", L"SHOP" };
-    const wchar_t* detail[3]{ goldDetail, L"+5", L"UP" };
+    swprintf_s(goldDetail, L"+%d\uCF54\uC778", ScaleReward(14 + max(1, m_bossRewardWave) * 3));
+    const wchar_t* labels[3]{ L"\uCF54\uC778", L"\uC0DD\uBA85", L"\uC0C1\uC810" };
+    const wchar_t* detail[3]{ goldDetail, L"+5", L"\uAC1C\uC120" };
     const shared_ptr<Material> materials[3]{
         m_goldUiMaterial,
         m_lifeUiMaterial,
@@ -2935,7 +3091,7 @@ void TowerDefenseScene::RenderWaveRewardUI(const ComPtr<ID3D12GraphicsCommandLis
     m_shopPanel->Render(commandList);
 
     WCHAR title[48]{};
-    swprintf_s(title, L"WAVE %d CLEAR", max(1, m_waveRewardWave));
+    swprintf_s(title, L"\uC6E8\uC774\uBE0C %d \uD074\uB9AC\uC5B4", max(1, m_waveRewardWave));
     RenderBitmapText(commandList,
         title,
         XMFLOAT2{ 0.5f, 0.304f },
@@ -2946,15 +3102,15 @@ void TowerDefenseScene::RenderWaveRewardUI(const ComPtr<ID3D12GraphicsCommandLis
 
     const int goldBonus = ScaleReward(6 + max(1, m_waveRewardWave) * 2);
     WCHAR goldDetail[24]{};
-    swprintf_s(goldDetail, L"+%dC", goldBonus);
+    swprintf_s(goldDetail, L"+%d\uCF54\uC778", goldBonus);
 
     const XMFLOAT2 choiceCenters[3]{
         XMFLOAT2{ 0.330f, 0.462f },
         XMFLOAT2{ 0.500f, 0.462f },
         XMFLOAT2{ 0.670f, 0.462f }
     };
-    const wchar_t* labels[3]{ L"GOLD", L"LIFE", L"SHOP" };
-    const wchar_t* detail[3]{ goldDetail, L"+2", L"FREE" };
+    const wchar_t* labels[3]{ L"\uCF54\uC778", L"\uC0DD\uBA85", L"\uC0C1\uC810" };
+    const wchar_t* detail[3]{ goldDetail, L"+2", L"\uBB34\uB8CC" };
     const shared_ptr<Material> materials[3]{
         m_goldUiMaterial,
         m_lifeUiMaterial,
@@ -3060,7 +3216,7 @@ void TowerDefenseScene::RenderResultUI(const ComPtr<ID3D12GraphicsCommandList>& 
     }
 
     RenderBitmapText(commandList,
-        m_mode == TowerDefenseMode::Victory ? L"VICTORY" : L"DEFEAT",
+        m_mode == TowerDefenseMode::Victory ? L"\uC2B9\uB9AC" : L"\uD328\uBC30",
         XMFLOAT2{ 0.5f, 0.345f },
         0.066f,
         3.70f,
@@ -3068,7 +3224,7 @@ void TowerDefenseScene::RenderResultUI(const ComPtr<ID3D12GraphicsCommandList>& 
         0.5f);
 
     WCHAR lineA[72]{};
-    swprintf_s(lineA, L"KILL %d   BOSS %d", m_totalEnemiesDefeated, m_bossesDefeated);
+    swprintf_s(lineA, L"\uCC98\uCE58 %d   \uBCF4\uC2A4 %d", m_totalEnemiesDefeated, m_bossesDefeated);
     RenderBitmapText(commandList,
         lineA,
         XMFLOAT2{ 0.5f, 0.424f },
@@ -3078,7 +3234,7 @@ void TowerDefenseScene::RenderResultUI(const ComPtr<ID3D12GraphicsCommandList>& 
         0.5f);
 
     WCHAR lineB[72]{};
-    swprintf_s(lineB, L"WAVE %d/%d   GOLD +%d", m_wavesCleared, MaxWave, m_goldEarned);
+    swprintf_s(lineB, L"\uC6E8\uC774\uBE0C %d/%d   \uCF54\uC778 +%d", m_wavesCleared, MaxWave, m_goldEarned);
     RenderBitmapText(commandList,
         lineB,
         XMFLOAT2{ 0.5f, 0.466f },
@@ -3088,7 +3244,7 @@ void TowerDefenseScene::RenderResultUI(const ComPtr<ID3D12GraphicsCommandList>& 
         0.5f);
 
     WCHAR lineC[72]{};
-    swprintf_s(lineC, L"PLACE %d   MERGE %d   BEST", m_towersPlaced, m_towersMerged);
+    swprintf_s(lineC, L"\uC124\uCE58 %d   \uD569\uC131 %d   \uCD5C\uACE0", m_towersPlaced, m_towersMerged);
     RenderBitmapText(commandList,
         lineC,
         XMFLOAT2{ 0.472f, 0.508f },
@@ -3106,7 +3262,7 @@ void TowerDefenseScene::RenderResultUI(const ComPtr<ID3D12GraphicsCommandList>& 
         tierMarkerWidgetIndex);
 
     RenderBitmapText(commandList,
-        L"ESC MENU",
+        L"ESC \uBA54\uB274",
         XMFLOAT2{ 0.5f, 0.560f },
         0.030f,
         3.70f,
@@ -3630,6 +3786,7 @@ void TowerDefenseScene::UpdateProjectiles(float timeElapsed)
                     enemy->health -= damage;
                     SpawnHitMarker(hitPosition, it->type, hitScale);
                     SpawnDamagePopup(hitPosition, damage, it->type, hitScale);
+                    PlayTowerDefenseSound(TowerDefenseSound::TowerHit, 70);
 
                     if (it->slowDuration > 0.0f)
                     {
@@ -3758,6 +3915,7 @@ void TowerDefenseScene::UpdateRollingBoulders(float timeElapsed)
             const XMFLOAT3 hitPosition = enemy.object->GetPosition();
             SpawnHitMarker(hitPosition, TowerDefenseTowerType::Splash, max(1.0f, enemy.visualScale));
             SpawnDamagePopup(hitPosition, boulder.damage, TowerDefenseTowerType::Splash, max(1.0f, enemy.visualScale));
+            PlayTowerDefenseSound(TowerDefenseSound::TowerHit, 90);
             for (int i = 0; i < 8; ++i)
             {
                 const float angle = XM_2PI * static_cast<float>(i) / 8.0f;
@@ -3928,6 +4086,7 @@ void TowerDefenseScene::SpawnEnemy(float healthMultiplier,
 
     if (isBoss)
     {
+        PlayTowerDefenseSound(TowerDefenseSound::BossAlert);
         m_cameraShakeDuration = 1.15f;
         m_cameraShakeTimer = m_cameraShakeDuration;
         m_cameraShakeIntensity = 0.58f;
@@ -4742,6 +4901,7 @@ bool TowerDefenseScene::TryPlaceTower(const XMFLOAT3& terrainPoint, const TowerD
     m_gold -= offer.cost;
     ++m_towersPlaced;
     m_highestTowerTier = max(m_highestTowerTier, tier);
+    PlayTowerDefenseSound(TowerDefenseSound::TowerPlace);
     return true;
 }
 
@@ -4763,6 +4923,7 @@ bool TowerDefenseScene::TryCastMeteor(const XMFLOAT3& terrainPoint, const TowerD
     m_gold -= offer.cost;
     SpawnMeteorStrike(impact, offer.tier);
     m_consumableCooldown = m_consumableCooldownDuration;
+    PlayTowerDefenseSound(TowerDefenseSound::SpellCast);
     return true;
 }
 
@@ -4780,6 +4941,7 @@ bool TowerDefenseScene::TryCastFreeze(const XMFLOAT3& terrainPoint, const TowerD
     m_gold -= offer.cost;
     SpawnFreezeField(center, offer.tier);
     m_consumableCooldown = m_consumableCooldownDuration;
+    PlayTowerDefenseSound(TowerDefenseSound::SpellCast);
     return true;
 }
 
@@ -4792,6 +4954,7 @@ bool TowerDefenseScene::TryCastBoulder(const XMFLOAT3& terrainPoint, const Tower
     m_gold -= offer.cost;
     SpawnRollingBoulder(terrainPoint, offer.tier);
     m_consumableCooldown = m_consumableCooldownDuration;
+    PlayTowerDefenseSound(TowerDefenseSound::SpellCast);
     return true;
 }
 
@@ -4835,6 +4998,7 @@ bool TowerDefenseScene::TryBoostTower(const XMFLOAT3& terrainPoint, const TowerD
     m_gold -= offer.cost;
     SpawnBoostEffect(tower->object->GetPosition(), tier);
     m_consumableCooldown = m_consumableCooldownDuration;
+    PlayTowerDefenseSound(TowerDefenseSound::SpellCast);
     return true;
 }
 
@@ -4869,6 +5033,7 @@ bool TowerDefenseScene::TryPlaceGenerator(const XMFLOAT3& terrainPoint, const To
     });
     m_gold -= offer.cost;
     SpawnCoinDropEffect(center, tier);
+    PlayTowerDefenseSound(TowerDefenseSound::TowerPlace);
     return true;
 }
 
@@ -4892,6 +5057,7 @@ bool TowerDefenseScene::TryMergeOfferWithTower(const XMFLOAT3& terrainPoint, con
     ++m_towersMerged;
     m_highestTowerTier = max(m_highestTowerTier, target->tier);
     SpawnMergeEffect(mergePosition, target->type, target->tier);
+    PlayTowerDefenseSound(TowerDefenseSound::Confirm);
     return true;
 }
 
@@ -4927,6 +5093,7 @@ bool TowerDefenseScene::TryMergeDraggedTowerWith(const XMFLOAT3& terrainPoint)
     m_selectedTower = survivorObject;
     ++m_towersMerged;
     m_highestTowerTier = max(m_highestTowerTier, mergedTier);
+    PlayTowerDefenseSound(TowerDefenseSound::Confirm);
     return true;
 }
 
@@ -5182,12 +5349,21 @@ void TowerDefenseScene::BeginTowerDrag(int offerSlot)
     offerSlot = clamp(offerSlot, 1, 3);
     ClearDragGhost();
     m_dragOffer = m_shopOffers[offerSlot - 1];
-    if (m_gold < m_dragOffer.cost) return;
-    if (IsConsumableOffer(m_dragOffer.kind) && m_consumableCooldown > 0.0f) return;
+    if (m_gold < m_dragOffer.cost)
+    {
+        PlayTowerDefenseSound(TowerDefenseSound::Error);
+        return;
+    }
+    if (IsConsumableOffer(m_dragOffer.kind) && m_consumableCooldown > 0.0f)
+    {
+        PlayTowerDefenseSound(TowerDefenseSound::Error);
+        return;
+    }
 
     m_draggingTower = true;
     m_dragOfferSlot = offerSlot;
     m_dragTier = clamp(m_dragOffer.tier, 1, MaxTowerTier);
+    PlayTowerDefenseSound(TowerDefenseSound::Click);
     XMFLOAT4 dragColor = TowerColor(m_dragOffer.type, m_dragOffer.tier, 0.38f);
     XMFLOAT3 visualSize = TowerVisualSize(m_dragOffer.type, m_dragTier);
     switch (m_dragOffer.kind)
@@ -5258,6 +5434,7 @@ void TowerDefenseScene::BeginPlacedTowerDrag(const shared_ptr<GameObject>& tower
     m_draggingPlacedTower = true;
     m_dragSourceTower = towerObject;
     m_selectedTower = towerObject;
+    PlayTowerDefenseSound(TowerDefenseSound::Click);
 
     m_dragGhostMaterial->SetBaseColor(TowerColor(tower.type, tower.tier, 0.38f));
     if (BuildTowerDragGhostVisual(m_dragOffer))
@@ -5479,6 +5656,7 @@ bool TowerDefenseScene::OnKeyDown(WPARAM wParam)
     if (wParam == 'V')
     {
         ToggleGameplayView();
+        PlayTowerDefenseSound(TowerDefenseSound::Click);
         return true;
     }
 
@@ -5491,12 +5669,14 @@ bool TowerDefenseScene::OnKeyDown(WPARAM wParam)
     if (wParam == 'F' && m_mode == TowerDefenseMode::Playing)
     {
         m_gameSpeedIndex = (m_gameSpeedIndex + 1) % 3;
+        PlayTowerDefenseSound(TowerDefenseSound::Click);
         return true;
     }
 
     if (wParam == VK_ESCAPE && m_mode != TowerDefenseMode::StartScreen)
     {
         BuildStartScreen();
+        PlayTowerDefenseSound(TowerDefenseSound::Click);
         return true;
     }
 
@@ -5511,11 +5691,13 @@ bool TowerDefenseScene::OnKeyDown(WPARAM wParam)
         if (wParam >= '1' && wParam <= '3')
         {
             m_selectedStage = clamp(static_cast<int>(wParam - '1'), 0, StagePresetCount - 1);
+            PlayTowerDefenseSound(TowerDefenseSound::Click);
             return true;
         }
         if (wParam >= '4' && wParam <= '6')
         {
             m_selectedDifficulty = clamp(static_cast<int>(wParam - '4'), 0, DifficultyPresetCount - 1);
+            PlayTowerDefenseSound(TowerDefenseSound::Click);
             return true;
         }
     }
@@ -5838,6 +6020,7 @@ bool TowerDefenseScene::TryHandleStartMenuClick(HWND hWnd)
         if (hitRect(XMFLOAT2{ stageCenters[stage], 0.448f }, XMFLOAT2{ 0.066f, 0.035f }))
         {
             m_selectedStage = stage;
+            PlayTowerDefenseSound(TowerDefenseSound::Click);
             return true;
         }
     }
@@ -5848,11 +6031,12 @@ bool TowerDefenseScene::TryHandleStartMenuClick(HWND hWnd)
         if (hitRect(XMFLOAT2{ difficultyCenters[difficulty], 0.580f }, XMFLOAT2{ 0.066f, 0.035f }))
         {
             m_selectedDifficulty = difficulty;
+            PlayTowerDefenseSound(TowerDefenseSound::Click);
             return true;
         }
     }
 
-    if (hitRect(XMFLOAT2{ 0.5f, 0.805f }, XMFLOAT2{ 0.110f, 0.040f }))
+    if (hitRect(XMFLOAT2{ 0.5f, 0.805f }, XMFLOAT2{ 0.120f, 0.044f }))
     {
         StartGame();
         return true;
@@ -6163,6 +6347,8 @@ TowerDefenseTextCache TowerDefenseScene::RasterizeBitmapText(const wstring& text
     ReleaseDC(nullptr, screenDc);
     if (!memoryDc) return cache;
 
+    const bool useHangulFallback = ContainsHangul(text);
+    const wchar_t* fontFamily = useHangulFallback ? L"Malgun Gothic" : m_bitmapFontFamily.c_str();
     HFONT font = CreateFontW(
         -cache.pixelHeight,
         0,
@@ -6175,9 +6361,9 @@ TowerDefenseTextCache TowerDefenseScene::RasterizeBitmapText(const wstring& text
         DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS,
         CLIP_DEFAULT_PRECIS,
-        NONANTIALIASED_QUALITY,
+        useHangulFallback ? ANTIALIASED_QUALITY : NONANTIALIASED_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE,
-        m_bitmapFontFamily.c_str());
+        fontFamily);
     HGDIOBJ oldFont = font ? SelectObject(memoryDc, font) : nullptr;
 
     RECT measure{ 0, 0, 1, 1 };
@@ -6309,14 +6495,14 @@ bool TowerDefenseScene::GetShopSlotRect(int tier, float width, float height,
     if (width <= 1.0f || height <= 1.0f) return false;
 
     tier = clamp(tier, 1, 3);
-    const float spacing = max(74.0f, width * 0.085f);
+    const float spacing = max(82.0f, width * 0.092f);
     outCenter = XMFLOAT2{
         width * 0.5f + (static_cast<float>(tier) - 2.0f) * spacing,
         height * 0.865f
     };
     outHalfSize = XMFLOAT2{
-        max(42.0f, width * 0.036f),
-        max(38.0f, height * 0.052f)
+        max(48.0f, width * 0.042f),
+        max(44.0f, height * 0.060f)
     };
     return true;
 }
@@ -6331,7 +6517,7 @@ bool TowerDefenseScene::IsTowerInfoPanelUnderCursor(HWND hWnd) const
     if (!GetClientCursor(hWnd, cursor, width, height)) return false;
 
     const XMFLOAT2 panelCenter{ width * 0.835f, height * 0.150f };
-    const XMFLOAT2 panelHalfSize{ width * 0.145f, height * 0.118f };
+    const XMFLOAT2 panelHalfSize{ width * 0.150f, height * 0.123f };
     return fabsf(static_cast<float>(cursor.x) - panelCenter.x) <= panelHalfSize.x &&
         fabsf(static_cast<float>(cursor.y) - panelCenter.y) <= panelHalfSize.y;
 }
@@ -6346,7 +6532,7 @@ bool TowerDefenseScene::IsWaveToggleUnderCursor(HWND hWnd) const
     if (!GetClientCursor(hWnd, cursor, width, height)) return false;
 
     const XMFLOAT2 center{ width * 0.500f, height * 0.083f };
-    const XMFLOAT2 halfSize{ max(50.0f, width * 0.053f), max(24.0f, height * 0.022f) };
+    const XMFLOAT2 halfSize{ max(54.0f, width * 0.060f), max(24.0f, height * 0.024f) };
     return fabsf(static_cast<float>(cursor.x) - center.x) <= halfSize.x &&
         fabsf(static_cast<float>(cursor.y) - center.y) <= halfSize.y;
 }
@@ -6362,10 +6548,10 @@ bool TowerDefenseScene::IsShopToggleUnderCursor(HWND hWnd) const
 
     const XMFLOAT2 center{
         width * 0.500f,
-        height * (m_shopCollapsed ? 0.945f : 0.760f)
+        height * (m_shopCollapsed ? 0.945f : 0.742f)
     };
     const XMFLOAT2 halfSize{
-        max(48.0f, width * 0.055f),
+        max(54.0f, width * 0.064f),
         max(20.0f, height * 0.023f)
     };
     return fabsf(static_cast<float>(cursor.x) - center.x) <= halfSize.x &&
@@ -6406,12 +6592,21 @@ bool TowerDefenseScene::TryGetTowerUpgradeChoiceFromCursor(HWND hWnd, int& outTy
 
 void TowerDefenseScene::ToggleWaveRunning()
 {
-    if (m_mode != TowerDefenseMode::Playing || m_bossRewardPending || m_waveRewardPending) return;
+    if (m_mode != TowerDefenseMode::Playing || m_bossRewardPending || m_waveRewardPending)
+    {
+        PlayTowerDefenseSound(TowerDefenseSound::Error);
+        return;
+    }
 
     const int waveSize = GetWaveSize(m_wave);
-    if (m_spawnedInWave >= waveSize) return;
+    if (m_spawnedInWave >= waveSize)
+    {
+        PlayTowerDefenseSound(TowerDefenseSound::Error);
+        return;
+    }
 
     m_waveRunning = !m_waveRunning;
+    PlayTowerDefenseSound(m_waveRunning ? TowerDefenseSound::WaveStart : TowerDefenseSound::Click);
     if (m_waveRunning && m_spawnTimer <= 0.0f)
     {
         m_spawnTimer = 0.02f;
@@ -6423,6 +6618,7 @@ void TowerDefenseScene::ToggleShopCollapsed()
     if (m_mode != TowerDefenseMode::Playing) return;
 
     m_shopCollapsed = !m_shopCollapsed;
+    PlayTowerDefenseSound(TowerDefenseSound::Click);
     if (m_shopCollapsed) ClearDragGhost();
 }
 
@@ -6482,10 +6678,18 @@ bool TowerDefenseScene::TryUpgradeTowerDamage(int typeIndex)
 {
     if (m_mode != TowerDefenseMode::Playing) return false;
     typeIndex = clamp(typeIndex, 0, TowerTypeCount - 1);
-    if (m_towerDamageLevels[typeIndex] >= MaxTowerDamageUpgradeLevel) return false;
+    if (m_towerDamageLevels[typeIndex] >= MaxTowerDamageUpgradeLevel)
+    {
+        PlayTowerDefenseSound(TowerDefenseSound::Error);
+        return false;
+    }
 
     const int cost = GetTowerDamageUpgradeCost(typeIndex);
-    if (m_gold < cost) return false;
+    if (m_gold < cost)
+    {
+        PlayTowerDefenseSound(TowerDefenseSound::Error);
+        return false;
+    }
 
     m_gold -= cost;
     ++m_towerDamageLevels[typeIndex];
@@ -6494,6 +6698,7 @@ bool TowerDefenseScene::TryUpgradeTowerDamage(int typeIndex)
     {
         if (tower.type == upgradedType) ApplyTowerStats(tower);
     }
+    PlayTowerDefenseSound(TowerDefenseSound::Confirm);
     return true;
 }
 
@@ -6554,6 +6759,7 @@ void TowerDefenseScene::ApplyBossRewardChoice(int choice)
 
     m_bossRewardPending = false;
     m_bossRewardWave = 0;
+    PlayTowerDefenseSound(TowerDefenseSound::Confirm);
 }
 
 void TowerDefenseScene::ShowBossReward()
@@ -6618,6 +6824,7 @@ void TowerDefenseScene::ApplyWaveRewardChoice(int choice)
 
     m_waveRewardPending = false;
     m_waveRewardWave = 0;
+    PlayTowerDefenseSound(TowerDefenseSound::Confirm);
     AdvanceToNextWave();
 }
 
@@ -6648,6 +6855,7 @@ void TowerDefenseScene::AddGold(int amount)
 
     m_gold += amount;
     m_goldEarned += amount;
+    PlayTowerDefenseSound(TowerDefenseSound::Coin, 180);
 }
 
 XMFLOAT4X4 TowerDefenseScene::BuildCameraAnchoredUiMatrix(const XMFLOAT2& normalizedCenter,
@@ -6697,7 +6905,8 @@ XMFLOAT4X4 TowerDefenseScene::BuildCameraAnchoredUiMatrix(const XMFLOAT2& normal
 XMFLOAT4X4 TowerDefenseScene::BuildCameraAnchoredModelMatrix(const XMFLOAT2& normalizedCenter,
     float normalizedHeight,
     float depth,
-    float yawRadians) const
+    float yawRadians,
+    float pitchRadians) const
 {
     XMFLOAT4X4 world{};
     XMStoreFloat4x4(&world, XMMatrixIdentity());
@@ -6738,6 +6947,7 @@ XMFLOAT4X4 TowerDefenseScene::BuildCameraAnchoredModelMatrix(const XMFLOAT2& nor
 
     XMStoreFloat4x4(&world,
         XMMatrixTranslation(-bounds.Center.x, -bounds.Center.y, -bounds.Center.z) *
+        XMMatrixRotationX(pitchRadians) *
         XMMatrixRotationY(yawRadians) *
         XMMatrixScaling(modelScale, modelScale, modelScale) *
         orientation *
@@ -6751,7 +6961,9 @@ void TowerDefenseScene::RenderTowerModelIcon(const ComPtr<ID3D12GraphicsCommandL
     int tier,
     const XMFLOAT2& normalizedCenter,
     float normalizedHeight,
-    float depth) const
+    float depth,
+    float yawRadians,
+    float pitchRadians) const
 {
     if (!object || !m_towerModelMesh) return;
 
@@ -6765,7 +6977,8 @@ void TowerDefenseScene::RenderTowerModelIcon(const ComPtr<ID3D12GraphicsCommandL
         normalizedCenter,
         normalizedHeight,
         depth,
-        XM_PIDIV4));
+        yawRadians,
+        pitchRadians));
     object->Render(commandList);
 }
 

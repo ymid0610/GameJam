@@ -407,14 +407,17 @@ private:
     XMFLOAT4X4 BuildCameraAnchoredModelMatrix(const XMFLOAT2& normalizedCenter,
         float normalizedHeight,
         float depth,
-        float yawRadians) const;
+        float yawRadians,
+        float pitchRadians = 0.0f) const;
     void RenderTowerModelIcon(const ComPtr<ID3D12GraphicsCommandList>& commandList,
         const shared_ptr<GameObject>& object,
         TowerDefenseTowerType type,
         int tier,
         const XMFLOAT2& normalizedCenter,
         float normalizedHeight,
-        float depth) const;
+        float depth,
+        float yawRadians = XM_PIDIV4,
+        float pitchRadians = 0.0f) const;
     void RenderTierMarkers(const ComPtr<ID3D12GraphicsCommandList>& commandList,
         const XMFLOAT2& normalizedCenter,
         int tier,
